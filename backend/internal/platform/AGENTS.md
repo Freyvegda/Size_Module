@@ -10,7 +10,7 @@ domain rules.
 | `httpx` | `respond.go` | `JSON`, `Error`, `DecodeJSON` helpers (uniform error payloads) |
 | `events` | `hub.go` | in-process pub/sub hub for job progress; publish never blocks, slow subscribers drop events |
 | `id` | `id.go` | `New() string` — UUID generation |
-| `postgres` | `pool.go`, `store.go`, `store_plan.go`, `store_stock.go`, `store_plans.go`, `store_queue.go` | `Connect`/`Healthy` + `Store`: SQL implementations of every module store interface; `SaveRun`/`Complete` write job → plan → sheets → placements in one transaction; `ClaimNext`/`Enqueue`/`Fail`/`Cancel`/`Get`/`ReleaseStale` back the async queue; `ListItems`/`CreateItem`/`UpdateItem` back the stock pool; `GetPlan`/`AcceptPlan` back plan reads and acceptance |
+| `postgres` | `pool.go`, `store.go`, `store_plan.go`, `store_stock.go`, `store_plans.go`, `store_campaigns.go`, `store_kpis.go`, `store_queue.go` | `Connect`/`Healthy` + `Store`: SQL implementations of every module store interface; `SaveRun`/`Complete` write job → plan → sheets → placements in one transaction; `ClaimNext`/`Enqueue`/`Fail`/`Cancel`/`Get`/`ReleaseStale` back the async queue; `ListItems`/`CreateItem`/`UpdateItem` back the stock pool; `GetPlan`/`SaveVersion`/`AcceptPlan` back plan reads, versions and acceptance; `CompleteItem` runs the campaign budget transaction; `KPIs` aggregates plan scorecards |
 | `db` | **generated** | sqlc + pgx v5 query layer used only by `postgres` |
 
 ## Rules

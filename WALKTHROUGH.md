@@ -95,11 +95,11 @@ rule values."*
 The repo is the **cut optimizer** — the first vertical slice of a bigger
 material-optimization platform. In scope: catalogue (materials, stock, parts),
 2D and 1D solvers, validation, a plan viewer (2D/3D and 1D bars), run archiving,
-the asynchronous job queue with SSE progress, and the **remnant lifecycle**
+the asynchronous job queue with SSE progress, the **remnant lifecycle**
 (physical stock pieces, labelled offcuts, remnant-first allocation, plan
-acceptance). Out of scope for now (see `plan.txt` and the README roadmap): live
-plan editing with locks, exports, costing, auth, 3D bin packing, irregular
-nesting.
+acceptance) and **plan editing** (validated versions, locked placements,
+re-solve, CSV/SVG/DXF/PDF exports). Out of scope for now (see `plan.txt` and the
+README roadmap): costing, auth, 3D bin packing, irregular nesting.
 
 ---
 
@@ -477,6 +477,14 @@ search removed or that the beam plan stands.
 `core.Portfolio` wrapping shelf + beam + polish, capabilities 2D guillotine,
 rank 1 — so when a caller says "just optimize", this is what runs by default.
 
+**`pinned-2d`** — added with the editing milestone. It packs the residual demand
+around planner-locked placements: it builds a guillotine cut tree over the
+locked pieces (which proves they are separable), subtracts each piece from its
+leaf region into the five disjoint bands around it, fills those free regions
+shelf-style, and packs the rest of the stock like `shelf-2d`. Only solvers with
+`Capabilities.Pinned` are considered when a problem carries pins, so an ordinary
+solver can never silently move a locked piece.
+
 **`solution.go`** — `assembleSolution`: the shared "build a Solution shell +
 `Summarize` metrics + timing" helper every 2D solver uses.
 
@@ -522,6 +530,11 @@ holding 4.8 m of posts must still report a reusable offcut.
 **`portfolio.go` — `best-1d` (also not registered).**
 Mirrors the 2D portfolio: wraps FFD + column generation, rank 1, keeps the best
 score.
+
+**`pinned-1d`** — added with the editing milestone. It keeps locked bar
+placements at their exact X, fills the free intervals first-fit, and reports
+interval remainders that meet the offcut policy. Like `pinned-2d`, it is only
+reachable when a problem carries `Pinned` sheets.
 
 Why "not registered": `optimizer.DefaultRegistry()` only calls `pack1d.New()`
 (the FFD solver). Neither `cg-1d` nor `best-1d` is reachable from the API, and
@@ -615,6 +628,28 @@ Current committed numbers (`golden.json`, seed 7, 500 ms budget):
 | `shelf-2d` (baseline) | 90.6 | 35.0 | 883.6 |
 | `ffd-1d` | 72.0 | 2.3 | 707.9 |
 
+#### 6.2.10 `export/` — plan files
+
+Pure-Go writers over a `core.Solution`, used by `GET /plans/{id}/exports`:
+
+- **CSV** (`csv.go`): the shop-floor cut list — one row per sheet, piece, cut
+  step and offcut, in millimetres with stable column names, plus unplaced
+  demand.
+- **SVG** (`svg.go`): a review drawing with every sheet stacked vertically,
+  pieces coloured by part code and offcuts in green.
+- **DXF** (`dxf.go`): AutoCAD R12 ASCII in millimetres, sheets side by side,
+  layers `SHEET` / `PARTS` / `OFFCUT` / `TEXT`.
+- **PDF** (`pdf.go`): a minimal dependency-free PDF 1.4 writer — A4 landscape,
+  one page per sheet, vector rectangles and Helvetica labels.
+- `Write` dispatches by format; `Options.Sheet` selects one sheet.
+
+#### 6.2.11 `costing/` — what the plan costs
+
+`Breakdown(problem, solution)` values a plan: new material, remnants taken,
+offcut credit, the part/trim/kerf/scrap shares of the stock value, net cost and
+cost per part / per m². The optimizer attaches it to every `Result`, and plans
+recompute it when they are read, so no cost is ever stored twice.
+
 ### 6.3 `internal/modules/` — HTTP feature layer
 
 One folder per feature; each owns its DTOs, routes, and a **small store
@@ -660,15 +695,41 @@ panicking.
   a `formatId` inherits code, dimensions and cost; `consumed` is set by plan
   acceptance, never through the API.
 
-**`plans/`** (store.go + http.go)
-- `GET /plans` lists summaries; `GET /plans/{id}` returns the stored layout in
-  the same `OptimizeResult` shape as a fresh solve (archived result JSON
-  preferred, validated reconstruction as fallback).
+**`plans/`** (store.go + http.go + edit.go)
+- `GET /plans` lists summaries; `GET /plans/{id}` rebuilds the stored layout in
+  the same `OptimizeResult` shape as a fresh solve, with per-placement `id` and
+  `locked` values plus the plan rules.
 - `POST /plans/{id}/accept` is the lifecycle step: one transaction consumes the
   physical pieces used, decrements `stock_formats.on_hand_qty` (never below
   zero), registers every reusable offcut as a labelled remnant (`OFF-…`, prorated
   cost, plan/sheet lineage), marks the plan `accepted` and writes an
   `audit_log` entry. A second accept is a `409`.
+- `POST /plans/{id}/edit` applies move/rotate/lock/delete operations
+  (`edit.go`), re-validates the layout (validator + edge trim) and stores it as
+  version `n+1` (`parent_plan_id`), archiving the source. Invalid layouts get
+  `422 edit_invalid` with the violation list.
+- `POST /plans/{id}/reoptimize` turns locked placements into
+  `core.PinnedSheet`s, removes the stock copies they occupy and runs a
+  pinned-capable solver; the result is stored as a new version.
+- `GET /plans/{id}/exports?format=csv|svg|dxf|pdf` streams the plan through
+  `internal/optimizer/export`.
+
+**`campaigns/`** (store.go + budget.go + http.go)
+- A campaign is an ordered set of items plus one shared stock budget
+  (`campaigns.stock` JSONB, `initial_stock` kept for reference).
+- `BuildItemProblem` (http.go) turns the next pending item into a problem: its
+  parts, the remaining budget, the campaign rules/objective and
+  `seed + item.seq` for reproducible runs.
+- `budget.go` is pure and unit-tested: `ConsumeBudget` removes one unit per
+  sheet used (a physical remnant leaves the budget), re-adds every offcut that
+  meets the policy as a `CMP-…` remnant with prorated cost, and `RemnantLabel`
+  names them uniquely.
+- `POST /campaigns/{id}/run-next` solves the earliest pending item, stores job
+  + draft plan + item status + updated budget in one transaction under a
+  campaign row lock (`CompleteItem`), and derives the campaign status: `active`
+  after the first run, `completed` when nothing is pending.
+- The budget is a planning sandbox: accepting a plan is still what changes the
+  plant's real stock. Only `draft`/`active` campaigns accept items or runs.
 
 ### 6.4 `internal/platform/` — infrastructure
 
@@ -702,7 +763,7 @@ panicking.
 `db/` is self-contained: schema, queries and the PowerShell commands to work
 with them.
 
-### 7.1 Schema — 15 tables (`migrations/0001_init.sql`, `0002_remnants.sql`)
+### 7.1 Schema — 19 tables (`migrations/0001` … `0005_campaigns.sql`)
 
 | Table | Purpose | Notes |
 |---|---|---|
@@ -715,26 +776,34 @@ with them.
 | `stock_formats` | catalogue sizes | length OR width×height (CHECK enforces one), on-hand qty, cost NUMERIC(14,4) |
 | `parts` | finished sizes | grain, allow_rotate, priority |
 | `part_routings` | operations + allowances | cut size = finished + Σ allowances |
+| `assemblies` | products built from subparts | overall size, kind (window/door/generic) |
+| `assembly_components` | ordered subparts | role/kind, dimensions and local-frame offsets |
 | `cut_jobs` | job queue + archive | status queued/running/done/failed/cancelled, input/result JSONB, seed, budget |
-| `plans` | a plan per job (versioned) | status draft/approved/accepted/archived, solver+version+seed, rules/metrics/notes JSONB |
-| `plan_sheets` | one row per stock sheet | dimensions, offcuts JSONB, cut_steps JSONB |
-| `placements` | one row per placed part | x/y/w/h µm, rotated, seq |
+| `plans` | a plan per job (versioned) | status draft/approved/accepted/archived, parent_plan_id, accepted_at, rules/metrics/notes JSONB |
+| `plan_sheets` | one row per stock sheet | dimensions, offcuts JSONB, cut_steps JSONB, stock_id/stock_item_id |
+| `placements` | one row per placed part | x/y/w/h µm, rotated, locked, seq |
 | `audit_log` | mutation log | action, entity, payload JSONB |
 | `stock_items` | physical pieces and labelled remnants | status, location, cost basis, plan/sheet lineage, partial unique label index |
+| `campaigns` | a batch of jobs sharing a stock budget | status, rules/objective, budget JSONB, initial_stock |
+| `campaign_items` | ordered jobs inside a campaign | parts JSONB, due date, status, plan/job links |
 
 Unit rule enforced everywhere: all lengths are `BIGINT` micrometers. Flexible
 details (attributes, rules, metrics, offcuts, cut steps) live in JSONB while
-indexed core fields stay relational. `0002_remnants.sql` also adds
+indexed core fields stay relational. `0002_remnants.sql` adds
 `plan_sheets.stock_id` / `stock_item_id` (which piece a sheet was cut from) and
-`plans.accepted_at`.
+`plans.accepted_at`; `0003_plan_edits.sql` adds `placements.locked` and
+`plans.parent_plan_id`; `0004_assemblies.sql` adds the product tables;
+`0005_campaigns.sql` adds campaigns and their items.
 
 ### 7.2 Queries and code generation
 
-`queries/*.sql` holds **~40 named queries** (`-- name: X :one/:many/:exec`):
+`queries/*.sql` holds **~50 named queries** (`-- name: X :one/:many/:exec`):
 jobs (create/get/list/run/done/fail/cancel), materials + specs, parts +
-routings, plans/sheets/placements (create, list, accept), stock formats (incl.
-`TakeStockOnHand`), stock items (list/get/create/update/consume, available
-remnants), audit insert. `sqlc.yaml` points generation at
+routings, assemblies + components, plans/sheets/placements (create, list,
+accept, archive, version), campaigns (create/get/update/stock/items/complete),
+stock formats (incl. `TakeStockOnHand`), stock items (list/get/create/update/
+consume, available remnants), kpis (aggregate + series), audit insert.
+`sqlc.yaml` points generation at
 `../backend/internal/platform/db` with pgx/v5, UUID → `google/uuid`,
 numeric → `float64`.
 
@@ -820,10 +889,21 @@ same in production behind a reverse proxy.
   - `acceptPlan(planId)`: `POST /api/v1/plans/{id}/accept` — consumes used
     pieces, decrements on-hand quantities and registers labelled remnants; state
     tracks `acceptStatus` / `acceptResult` / `acceptError`;
+  - `editPlan({planId, operations})` / `reoptimizePlan({planId, operations, solver})`:
+    POST the next plan version; the fulfilled reducer swaps in the new result
+    and plan id, and `planEditStatus` / `planEditError` drive the editor
+    toolbar;
   - state: result + dimension + source (`api`/`sample`/`none`), run status,
-    comparison status, async job state.
-- `features/viewer/viewerSlice.ts` — pure UI state: mode (`2d`/`3d`, default
-  **3d**), selected sheet, selected part, show offcuts, explode amount.
+    comparison status, async job state, plan acceptance and editing status.
+- `features/kpis/kpiSlice.ts` — the realized-yield report (`GET /api/v1/kpis`)
+  fetched with the chosen window in days; the dashboard renders its buckets and
+  trend bars.
+- `features/campaigns/campaignSlice.ts` — campaign list + detail plus the
+  create/add-item/remove/run-next mutations; a fulfilled mutation stores the
+  returned detail, so the budget and item list always reflect the server.
+- `features/viewer/viewerSlice.ts` — UI state: mode (`2d`/`3d`, default
+  **3d**), selected sheet, selected part, show offcuts, explode amount, plus the
+  edit draft (`editing`, `draftSheets`, `pendingOps`).
 
 ### 8.3 Library (`src/lib/`)
 
@@ -855,12 +935,16 @@ same in production behind a reverse proxy.
   a two-column layout. Left: for 2D plans the 3D/2D canvas inside `Suspense`,
   toggles for 2D/3D, offcuts on/off and (in 3D) the explode slider; for 1D
   plans (detected via `optimizer.dimension`) the bar tracks of `BarPlanView`.
-  Right: a stack of cards — **Scorecard** (yield, waste, offcut/scrap/kerf/trim
-  areas for sheets or stock/used/offcut lengths for bars, pattern count, cost,
-  solve time, score), **Sheets/Bars** list (click to inspect), **Selected
-  piece** details, **Cut sequence** (the ordered cut steps for the active
-  sheet), **Why this plan** (the solver's notes), **Unplaced demand** (part,
-  quantity, reason) and **Validation** (violations with severity badges).
+  When the current result has an archived plan id the card also carries a
+  toolbar: **Edit layout** (2D), **Save edits**, **Re-solve with locks**,
+  **Cancel** and CSV/SVG/DXF/PDF export links. Right: a stack of cards —
+  **Scorecard** (yield, waste, offcut/scrap/kerf/trim areas for sheets or
+  stock/used/offcut lengths for bars, pattern count, cost, solve time, score),
+  **Sheets/Bars** list (click to inspect), **Selected piece** details (plus
+  Rotate / Lock / Delete in edit mode), **Cut sequence** (the ordered cut steps
+  for the active sheet), **Why this plan** (the solver's notes), **Unplaced
+  demand** (part, quantity, reason) and **Validation** (violations with severity
+  badges).
 - `BarPlanView.tsx` — the 1D renderer: every bar is a horizontal track with
   coloured part segments (deterministic `partColor`), green offcut ranges,
   click-to-select, and millimetre end labels. Bars come back as `SheetPlan`s
@@ -874,6 +958,11 @@ same in production behind a reverse proxy.
   - 3D mode: all sheets stacked with a gap, perspective camera, orbit
     controls, grid; the explode slider spreads the stack (z computed per sheet
     index).
+  - Edit mode (2D only): pieces are draggable — `PartMesh` captures the
+    pointer, previews the move locally, snaps to millimetres on release and
+    clamps to the sheet; orbit controls are disabled while dragging. Locked
+    pieces glow emerald. Clicks select the placement key (`id` when the plan is
+    archived, part id for sample data).
   - Each sheet: a base plate mesh, one box per placement (position converted
     from top-left-origin layout coordinates to a centre-origin scene), offcuts
     as translucent green plates, and an `Html` label.
@@ -885,16 +974,25 @@ same in production behind a reverse proxy.
 
 ### 8.5 Pages (`src/pages/`)
 
-- `DashboardPage.tsx` — three cards (System status from health/meta, Solvers
-  list from meta with capability badges and descriptions plus a 1D bar demo
-  loader, Latest result with a link to the viewer) plus buttons: Refresh status,
-  Load demo plan, Run demo optimization. Running navigates to `/viewer` on
-  success.
+- `DashboardPage.tsx` — the KPI band (realized yield/waste, stock value, cost
+  per part, remnants used, parts produced, offcuts kept, pipeline plans and
+  value, plus a yield trend bar per accepted plan), then three cards (System
+  status from health/meta, Solvers list from meta with capability badges and
+  descriptions plus a 1D bar demo loader, Latest result with a link to the
+  viewer) plus buttons: Refresh, Load demo plan, Run demo optimization. Running
+  navigates to `/viewer` on success.
 - `PlanViewerPage.tsx` — hosts `PlanViewer`; auto-loads the 2D demo plan on
   mount when no result exists; offers "Load 2D demo" and "Load 1D bar demo",
   and, when the current result has an archived plan id, an **Accept plan**
   button whose result card lists the created remnant labels. Accepting also
   refreshes the available stock pool.
+- `CampaignsPage.tsx` — the batch list plus a "New campaign" form: name, solve
+  budget, a switch that pulls in the plant's available remnants and a quantity
+  per stock format for the budget.
+- `CampaignDetailPage.tsx` — one campaign: progress, **Run next item**,
+  cancel, the remaining-budget table (CMP-… pieces marked as remnants), the
+  ordered item list with due dates and an **Open plan** action per planned item,
+  and an "Add item" form that builds parts from the catalog with quantities.
 - `JobsPage.tsx` — the solver playground: pick a dimension profile (2D sheets /
   1D bars) and cut mode (guillotine / free cutting), then Run, compare every
   compatible solver (dry runs, table with a "best" badge), or Queue job to the
@@ -995,6 +1093,55 @@ beats beam on the same problem.
 5. The result card lists the new labels; Stock → Pieces & remnants shows them as
    available, and the next run can pick them up. Accepting again returns `409`.
 
+### 9.6 Edit a plan, lock it, re-solve, export
+
+1. Run an optimization (the sync `/optimize` or a queued job both archive a
+   plan) and open the viewer. The toolbar appears because the result carries a
+   plan id.
+2. **Edit layout** switches to 2D and starts a draft: drag pieces (snapped to
+   1 mm, clamped to the sheet), pick a piece and Rotate / Lock / Delete. Locked
+   pieces glow emerald; nothing is stored until **Save edits**.
+3. **Save edits** posts the pending operations to `POST /plans/{id}/edit`. The
+   server applies them, re-checks bounds/trim/kerf/guillotine/demand and stores
+   version `n+1`; the source plan becomes `archived`. An impossible drag is
+   rejected with the violation text (overlap, trim, …) and the draft stays.
+4. **Re-solve with locks** posts the same operations plus a solve to
+   `POST /plans/{id}/reoptimize`. Locked placements become pinned sheets, the
+   stock copies they occupy are removed from the free pool, and `pinned-2d`
+   (or `pinned-1d`) fills the free regions with everything else. The notes say
+   how many locked placements stayed put.
+5. Exports are plain downloads: CSV (`sheet,label,stock,kind,seq,part,…` with
+   cut steps and offcuts), SVG, DXF R12 and PDF — one click each in the same
+   toolbar, or `GET /plans/{id}/exports?format=csv&sheet=2`.
+
+### 9.7 Costing a result and reading the KPIs
+
+1. Every `OptimizeResult` (sync run, queued job, plan read) carries `cost`:
+   new material, remnants taken, offcut credit, net cost, cost per part and per
+   m². The viewer's Scorecard shows the breakdown under the metrics.
+2. Accept a plan and the dashboard's **Realized yield** band updates on the next
+   refresh: accepted plans' yield/waste, stock value, remnants used, parts
+   produced, offcuts kept. The window selector fetches
+   `GET /api/v1/kpis?days=30|90|365`.
+3. The trend bars are the accepted plans oldest-to-newest: bar height is yield,
+   opacity rises with waste, and hovering shows the date and sizes. `created`
+   numbers show the pipeline (all plans, not just accepted ones) so the gap
+   between planned and committed work is visible.
+
+### 9.8 Batching a week of orders (campaign)
+
+1. Campaigns page → pick a stock budget (format quantities and/or "use
+   available remnants"), name it and create it.
+2. On the campaign page, add the jobs in order: catalog parts with quantities
+   and an optional due date.
+3. **Run next item** solves the earliest pending item against what is left:
+   the used sheets leave the budget and the plan's offcuts re-enter it as
+   `CMP-…` remnants with prorated cost. The result card links straight to the
+   plan in the viewer, where it can be edited, re-solved or accepted.
+4. When the last item is planned the campaign flips to `completed`; further
+   runs answer `409`. The budget table is the honest picture of what the batch
+   consumed — accepting the individual plans is what changes plant stock.
+
 ---
 
 ## 10. Quality gates: how we know a plan is good and valid
@@ -1009,10 +1156,12 @@ Three independent layers:
    block any solver change that regresses the mean objective score by more than
    0.5 points on seed-7 instances at a 500 ms budget. Score (not waste alone)
    is the gate because demand fulfilment is the first objective.
-3. **Invariant tests** — unit/property tests per package (`geom`, `pack2d`,
-   `pack1d` including `cg_test.go`, `lp`, `core/registry_test.go`) plus
-   cross-solver quality tests. `go test ./...` runs all of it;
-   `go test -short ./...` skips the slow golden gate while iterating.
+3. **Invariant tests** — unit/property tests per package (`geom`, `pack2d`
+   including pinned re-solve, `pack1d` including `cg_test.go`, `lp`,
+   `core/registry_test.go`, `export`), a postgres integration test that walks
+   edit → lock → re-solve → accept, plus cross-solver quality tests.
+   `go test ./...` runs all of it; `go test -short ./...` skips the slow golden
+   gate while iterating.
 
 Why a *mean score* and not "best waste"? Because a plan that packs tighter but
 places fewer parts is worse by the stated objective — the report always shows
@@ -1024,24 +1173,28 @@ fill %, yield %, waste % and score side by side so nothing is hidden.
 
 Wired and working today: 2D shelf/beam/polish/column-generation/MaxRects
 solvers plus the `best-2d` portfolio; 1D FFD, column generation and `best-1d`;
-guillotine cut-tree proof; validator; explainer; benchmark harness + golden
-gate; REST API (health/meta/solvers/optimize/demo/materials/stock-formats/parts/
-stock-items/plans); the async job pipeline (`POST /jobs`, worker pool,
-`GET /jobs/{id}`, cancel, SSE progress); the remnant lifecycle (physical pieces,
-labels, `includeRemnants`, plan acceptance with stock decrement + audit);
-PostgreSQL schema + seeds + sqlc generation; run archiving in one transaction;
-React SPA with dashboard, viewer (2D/3D and 1D bars), solver comparison, async
-queue with live progress, materials, parts, stock pool (formats + remnants),
-jobs, settings; graceful degradation at every layer.
+pinned re-solve solvers (`pinned-2d`, `pinned-1d`); guillotine cut-tree proof;
+validator; explainer; cost breakdowns; benchmark harness + golden gate; REST API
+(health/meta/solvers/optimize/demo/materials/stock-formats/parts/assemblies/
+stock-items/plans/campaigns/kpis); the async job pipeline (`POST /jobs`, worker
+pool, `GET /jobs/{id}`, cancel, SSE progress); the remnant lifecycle (physical
+pieces, labels, `includeRemnants`, plan acceptance with stock decrement + audit);
+plan editing with locked-placements re-solve and CSV/SVG/DXF/PDF exports;
+realized-yield KPI aggregation with a dashboard band; campaign planning (shared
+stock budget, ordered `run-next`, CMP-… offcut remnants); product/assembly
+catalog with a 3D scene; PostgreSQL schema + seeds + sqlc generation; run
+archiving in one transaction; React SPA with dashboard, viewer (2D/3D and 1D
+bars, drag editor), solver comparison, async queue with live progress,
+materials, parts, products, stock pool (formats + remnants), jobs, campaigns,
+settings; graceful degradation at every layer.
 
 Not implemented yet (from README + plan.txt, confirmed in code):
-- live plan editing with locks and re-solve; exports (PDF/DXF/SVG/CSV); costing
-  and KPI dashboards; auth/sessions/RBAC; CSV imports;
-- multi-plant UI, 3D bin packing, irregular nesting;
+- auth/sessions/RBAC; CSV imports; machine-control formats; defect maps;
+- multi-plant UI, irregular nesting, 3D bin packing;
 - OpenAPI-driven codegen (both sides are hand-maintained for now).
 
 Known quirks and drift (worth knowing before you triage a bug):
-- **`plan.txt` is historical.** It describes TanStack Query + Zustand +
+- **`plan-v1.txt` is historical.** It describes TanStack Query + Zustand +
   oapi-codegen; the code actually uses Redux Toolkit and hand-written types.
   The README/AGENTS files acknowledge this drift.
 - **The synchronous `POST /optimize` still exists** for interactive use (plan

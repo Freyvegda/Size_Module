@@ -16,4 +16,4 @@ host (`backend/`, `frontend/`); compose runs just the database services.
 - Start/stop through `db/scripts/up.ps1` / `down.ps1`, not raw compose, so the
   right env file is picked up.
 - There is intentionally no API/frontend Dockerfile yet (single-plant
-  self-hosted deployment comes later — see `plan.txt`).
+  self-hosted deployment comes later — see `plan-v1.txt`).

@@ -12,11 +12,13 @@ integer micrometers (`core.Dim = int64`).
 | `optimizer.go` (root) | facade: builds the default registry, solves, reports violations | `DefaultRegistry()`, `Solve()`, `DetectProfile()`, `Result` |
 | `core/` | domain language + solver seam | `Problem`, `Solution`, `Rules`, `Part`, `StockItem`, `Rect`, `Placement`, `SheetPlan`, `Metrics`, `Capabilities`, `Solver`, `Registry`, `Summarize`, `Score` |
 | `geom/` | rectangle math + guillotine cut-tree reconstruction | `Separated`, `Intersects`, `SplitV/H`, `BuildCutTree`, `Instructions` |
-| `pack1d/` | 1D solver for bars/profiles | `FFDSolver` (`ffd-1d`) |
-| `pack2d/` | 2D solvers for sheets/panels | `ShelfSolver` (`shelf-2d`), `BeamSolver` (`beam-2d`), `PolishSolver` (`polish-2d`), `PortfolioSolver` (`best-2d`), `assembleSolution` |
+| `pack1d/` | 1D solver for bars/profiles | `FFDSolver` (`ffd-1d`), `PinnedSolver` (`pinned-1d`) |
+| `pack2d/` | 2D solvers for sheets/panels | `ShelfSolver` (`shelf-2d`), `BeamSolver` (`beam-2d`), `PolishSolver` (`polish-2d`), `PinnedSolver` (`pinned-2d`), `PortfolioSolver` (`best-2d`), `assembleSolution` |
+| `export/` | CSV/SVG/DXF/PDF writers for finished plans | `Write`, `CSV`, `SVG`, `DXF`, `PDF` |
 | `cutter/` | turns a sheet layout into ordered cut steps | `ForSheet(sheet, kerf)` |
 | `validator/` | mandatory gate before a plan is shown/stored | `Validate(problem, solution)`, `Violation` |
 | `explain/` | plain-language notes, waste split, lower bound | `Notes(problem, solution)` |
+| `costing/` | cost breakdown of a solution (new material, remnants, offcut credit, net cost, per part / per m²) | `Breakdown(problem, solution)`, `Report` |
 | `bench/` | benchmark harness + golden regression gate | `LoadDir`, `Run`, `Report`, `Generate`, `Golden`, `Compare` |
 
 ## The seam
@@ -40,7 +42,12 @@ type Solver interface {
 | `polish-2d` | 2D | 3 | beam plan + local search (dissolve/merge/repack sheets) |
 | `beam-2d` | 2D | 10 | beam search over guillotine cut trees; ship width 24 |
 | `shelf-2d` | 2D | 20 | fast baseline |
+| `pinned-2d` | 2D | 40 | shelf packing that keeps planner-locked placements; `Capabilities.Pinned` |
+| `pinned-1d` | 1D | 40 | FFD packing that keeps locked bar placements |
 | `ffd-1d` | 1D | 10 | First-Fit-Decreasing |
+
+`Problem.Pinned` carries locked layouts; the registry filters candidates by
+`Capabilities.Pinned`, so a solver that cannot honour locks never receives them.
 
 Progress callbacks must be **monotonic** (only improving partial plans).
 

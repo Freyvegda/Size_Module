@@ -13,7 +13,7 @@ not archived.
 | `cmd/cutoptics/main.go` | entry point: flags (`-demo`, `-demo-bar`, `-addr`), config, registry, optional pgx pool, chi router, graceful shutdown |
 | `cmd/cutoptics/bench.go` | the `bench` subcommand: benchmark harness + golden regression gate (exit 1 on regression) |
 | `api/openapi.yaml` | hand-written OpenAPI 3.1 contract — the source of truth for request/response schemas |
-| `internal/modules/` | HTTP-facing feature modules: `catalog`, `parts`, `jobs`, `stock`, `plans` |
+| `internal/modules/` | HTTP-facing feature modules: `catalog`, `parts`, `jobs`, `stock`, `plans`, `campaigns`, `kpis` (+ the products/`assemblies` module) |
 | `internal/optimizer/` | pure Go solver library (no DB, no HTTP) |
 | `internal/platform/` | config, HTTP server, http helpers, postgres pool/store, sqlc-generated queries, id |
 | `testdata/benchmarks/` | committed benchmark instances (`glass-mixed`, `wood-panels`, `metal-bars`) + `golden.json` |
@@ -26,10 +26,13 @@ and `httpserver.New` mounts, in this order:
 - `GET /healthz`, `GET /api/v1/healthz`, `GET /api/v1/meta`
 - jobs module (sync): `POST /api/v1/optimize`, `GET /api/v1/solvers`, `GET /api/v1/demo/plan`, `GET /api/v1/demo/bar-plan`
 - jobs module (async queue): `POST /api/v1/jobs`, `GET /api/v1/jobs/{id}`, `POST /api/v1/jobs/{id}/cancel`, `GET /api/v1/jobs/{id}/events` (SSE)
-- catalog module: `GET/POST /api/v1/materials`, `GET /api/v1/stock-formats`
+- catalog module: `GET/POST /api/v1/materials`, `GET/POST /api/v1/material-specs`, `GET/POST /api/v1/stock-formats`
 - parts module: `GET/POST /api/v1/parts`
+- assemblies module: `GET/POST /api/v1/assemblies`, `GET /api/v1/assemblies/{id}` (products with subparts)
 - stock module: `GET/POST /api/v1/stock-items`, `GET/PATCH /api/v1/stock-items/{id}`
-- plans module: `GET /api/v1/plans`, `GET /api/v1/plans/{id}`, `POST /api/v1/plans/{id}/accept`
+- plans module: `GET /api/v1/plans`, `GET /api/v1/plans/{id}`, `POST /api/v1/plans/{id}/accept`, `POST /api/v1/plans/{id}/edit`, `POST /api/v1/plans/{id}/reoptimize`, `GET /api/v1/plans/{id}/exports?format=csv|svg|dxf|pdf`
+- kpis module: `GET /api/v1/kpis?days=90` (or `from`/`to`) — realized/pipeline material and cost aggregates plus a trend series
+- campaigns module: `GET/POST /api/v1/campaigns`, `GET/PATCH /api/v1/campaigns/{id}`, `POST /api/v1/campaigns/{id}/items`, `DELETE /api/v1/campaigns/{id}/items/{itemID}`, `POST /api/v1/campaigns/{id}/run-next`
 
 Optimize flow (sync): `jobs.Service.Run` → `optimizer.Solve` (picks the solver from the
 registry, or honours `?solver=`) → `validator.Validate` → optional archive via

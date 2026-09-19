@@ -36,7 +36,13 @@ docs/       Domain glossary and notes
 | Physical stock pool | `stock_items` distinguishes catalog sizes from pieces; `/api/v1/stock-items` registers labelled remnants, retires them, and keeps lineage to the plan that produced them |
 | Remnant-first allocation | `?includeRemnants=1` loads available labelled remnants into the problem; constructive solvers use them before fresh sheets and the objective does not charge remnant sheets as new stock |
 | Plan acceptance | `POST /api/v1/plans/{id}/accept` consumes pieces, decrements on-hand quantities, registers labelled offcut remnants and writes an audit entry in one transaction |
-| Archived plan API | `GET /api/v1/plans` and `GET /api/v1/plans/{id}` return a stored plan in the same shape as a fresh solve (archived result JSON, re-validated reconstruction as fallback) |
+| Archived plan API | `GET /api/v1/plans` and `GET /api/v1/plans/{id}` return a stored plan in the same shape as a fresh solve, with per-placement ids, lock flags and the rules |
+| Interactive plan editing | the viewer drags/rotates/locks/deletes placements; the server re-validates and stores each edit as a new plan version (`POST /plans/{id}/edit`), archiving the source |
+| Locked re-solve | `pinned-2d` / `pinned-1d` keep locked placements exactly in place and fill the free regions around them with the rest of the demand (`POST /plans/{id}/reoptimize`) |
+| Exports | CSV cut list (pieces, ordered cuts, offcuts), SVG review drawing, DXF R12 for CAD/CAM and a printable PDF — `GET /plans/{id}/exports?format=csv\|svg\|dxf\|pdf` |
+| Costing | every result carries a `cost` breakdown: new material, remnants taken, offcut credit, net cost, cost per part and per m² (`internal/optimizer/costing`) |
+| Realized-yield KPIs | `GET /api/v1/kpis?days=90` aggregates plan scorecards (realized = accepted plans, created = pipeline) with a trend series; the dashboard shows KPI cards and a yield chart |
+| Campaign planning | ordered jobs share one stock budget: running an item consumes sheets, returns its offcuts as `CMP-…` remnants and archives a draft plan; `POST /campaigns/{id}/run-next`, stock-budget UI at `/campaigns` |
 | PostgreSQL schema + seeds | materials, specs, stock formats, parts, routings, jobs, plans, placements, audit |
 | Job archive | every non-dry `POST /optimize` persists job + plan + sheets + placements in one transaction |
 | Web app | dashboard, plan viewer (2D orthographic / 3D exploded with three.js, 1D bar tracks), solver picker + comparison, materials, parts, stock, jobs (sync run + async queue with live progress), settings |
@@ -44,8 +50,9 @@ docs/       Domain glossary and notes
 See [`docs/solver.md`](docs/solver.md) for how the solvers work and how quality
 is gated.
 
-Not implemented yet (planned): live plan editing with locks and re-solve,
-exports (PDF/DXF/SVG/CSV), costing and KPI dashboards, authentication/roles.
+Not implemented yet (planned): authentication/roles, CSV imports,
+multi-plant, machine-control formats, defect maps, irregular nesting / 3D bin
+packing, OpenAPI-driven codegen.
 
 ## Quickstart
 
@@ -135,6 +142,80 @@ zero), every reusable offcut is registered as a labelled remnant
 `audit_log` entry is written. `metrics.remnantSheets` in any result says how many
 sheets came from leftovers instead of new stock.
 
+## Editing plans and exports
+
+Plans are immutable versions. The viewer's **Edit layout** mode drags, rotates,
+locks and deletes placements; saving calls `POST /plans/{id}/edit`, which
+re-validates the layout (bounds, trim, kerf, guillotine feasibility, demand) and
+stores it as version `n+1` — the source is archived. **Re-solve with locks**
+(`POST /plans/{id}/reoptimize`) keeps every locked placement exactly where it is
+and packs the remaining demand into the free regions around them.
+
+```powershell
+# Move one placement and lock it, saving a new version
+curl.exe -X POST "http://localhost:8080/api/v1/plans/<id>/edit" `
+  -H "Content-Type: application/json" `
+  -d '{\"operations\":[{\"placementId\":\"<placement-id>\",\"x\":700000,\"y\":600000,\"locked\":true}]}'
+
+# Re-solve around the locks, or download the plan
+curl.exe -X POST "http://localhost:8080/api/v1/plans/<id>/reoptimize" -d "{}"
+curl.exe -o plan.csv "http://localhost:8080/api/v1/plans/<id>/exports?format=csv"
+```
+
+Exports: `csv` (shop-floor cut list), `svg` (review drawing), `dxf` (R12, mm,
+layers SHEET/PARTS/OFFCUT/TEXT) and `pdf` (one page per sheet).
+
+## Costing and realized-yield KPIs
+
+Every optimization result (sync, queued or archived plan) carries a `cost`
+breakdown in the same currency as `stock_formats.cost_per_unit`:
+
+```json
+"cost": {
+  "newMaterialCost": 250,   "remnantCost": 0,
+  "totalStockCost": 250,    "offcutCredit": 86.96,
+  "netCost": 163.04,        "partCost": 139.58,
+  "trimCost": 3.77,         "kerfCost": 0.72,   "scrapCost": 23.46,
+  "costPerPart": 7.41,      "costPerM2": 10.11
+}
+```
+
+A sheet from a catalog format costs its full price; a remnant costs its prorated
+value; part/trim/kerf/scrap areas carry their share of the sheet cost; the
+offcut credit values leftovers that stay in stock. **Net cost = material taken −
+offcut credit** — the material the order really consumed.
+
+The dashboard reads `GET /api/v1/kpis?days=90`: `realized` aggregates accepted
+plans (what the shop committed to), `created` every plan in the window, and
+`series` is the yield/waste trend. All numbers come from the stored plan
+scorecards, so the dashboard and a plan's own scorecard can never disagree.
+
+## Campaign planning
+
+A campaign is an ordered set of jobs sharing one stock budget — how a shop
+batches a week of orders through the saw:
+
+```powershell
+# Create a campaign with a budget (formats and/or the plant's remnants)
+curl.exe -X POST "http://localhost:8080/api/v1/campaigns" -H "Content-Type: application/json" `
+  -d '{"name":"Week 38","useRemnants":true,"stock":[{"id":"<format-id>","code":"SHEET-3210x2250","width":3210000,"height":2250000,"quantity":4,"costPerUnit":62.5}]}'
+
+# Add the jobs, in the order they should run
+curl.exe -X POST "http://localhost:8080/api/v1/campaigns/<id>/items" -H "Content-Type: application/json" `
+  -d '{"name":"Order 1042","dueDate":"2026-09-25","parts":[{"id":"p1","code":"PANE-600x400","width":600000,"height":400000,"quantity":6,"allowRotate":true}]}'
+
+# Plan the next item against what is left
+curl.exe -X POST "http://localhost:8080/api/v1/campaigns/<id>/run-next" -d "{}"
+```
+
+Each run solves the earliest pending item, archives it as a job plus **draft**
+plan and stores the reduced budget: used sheets leave, offcuts re-enter as
+labelled `CMP-…` remnants with prorated cost, and the campaign becomes `active`
+(first run) and `completed` (nothing pending). The budget is a planning sandbox;
+accepting a plan is still what changes the plant's real stock. The Campaigns
+page (`/campaigns`) shows the remaining budget, the ordered items, due dates and
+a button to open each item's plan.
+
 ## The DB folder
 
 `db/` is self-contained: schema, queries and the commands to work with them.
@@ -179,5 +260,16 @@ optimizer keeps working and results simply are not archived.
 6. ~~Remnant lifecycle: physical sheets, offcut labels, remnant-first
    allocation~~ — done (`stock_items`, `/api/v1/stock-items`, `preferRemnants`,
    labelled offcuts on acceptance, audit trail).
-7. Interactive plan editing with locks and re-solve; exports (PDF/DXF/CSV/SVG).
-8. Costing, realized-yield KPIs, campaign planning.
+7. ~~Interactive plan editing with locks and re-solve; exports (PDF/DXF/CSV/SVG)~~
+   — done (validated plan versions, `pinned-2d`/`pinned-1d` re-solve around
+   locks, CSV/SVG/DXF/PDF downloads).
+8. ~~Costing, realized-yield KPIs~~ — done (`cost` breakdown on every result,
+   `GET /api/v1/kpis`, dashboard cards and a yield trend).
+9. ~~Campaign planning (group jobs into a campaign with a shared stock budget
+   and schedule)~~ — done (`campaigns` + `campaign_items`, ordered `run-next`
+   with a shrinking/refilling stock budget, CMP-… remnant labels, campaign UI).
+
+Remaining backlog (see the forward plan, `plan.txt`): auth/sessions/RBAC, CSV
+imports, machine-control formats, defect maps, multi-plant, irregular nesting
+and 3D bin packing, OpenAPI-driven codegen; the original v1 plan is kept as
+`plan-v1.txt`.

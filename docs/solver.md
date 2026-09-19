@@ -43,6 +43,8 @@ rejected, never displayed or stored.
 | `beam-2d` | 2D | Beam search over guillotine cut trees | 10 |
 | `maxrects-2d` | 2D | MaxRects free-rectangle packing for `cutMode: free` (CNC, laser, waterjet) | 10 |
 | `shelf-2d` | 2D | Shelf/strip packer (baseline every candidate is compared against) | 20 |
+| `pinned-2d` | 2D | Shelf/strip packer that keeps planner-locked placements in place (`Capabilities.Pinned`) | 40 |
+| `pinned-1d` | 1D | FFD packer that keeps locked bar placements in place | 40 |
 | `ffd-1d` | 1D | First-Fit-Decreasing for bars, profiles and tubes | 10 |
 
 The job layer picks by dimension profile **and** cut mode (`Registry.ForProblem`):
@@ -201,6 +203,36 @@ the best objective score, and `explain.Notes` says either how many sheets came
 from remnants or that the available remnants did not improve the plan. A remnant
 that is too small to hold the demand efficiently stays in the pool instead of
 being chopped into scrap — which is the right shop decision.
+
+## Pinned placements (re-solve around locks)
+
+A planner can lock placements; a re-solve must keep them exactly where they are.
+The plans module turns every sheet with locked pieces into a `core.PinnedSheet`
+and removes the stock copy it occupies from the free pool. Only solvers with
+`Capabilities.Pinned` are considered (the registry filters them), so an ordinary
+solver can never silently move a locked piece:
+
+- `pinned-2d` builds a guillotine cut tree over the locked pieces (which also
+  proves *they* are separable), subtracts each piece from its leaf region into
+  the five disjoint bands around it, and fills those free regions shelf-style
+  with the remaining demand. The rest of the stock is packed like `shelf-2d`.
+- `pinned-1d` keeps the locked X positions on the bar, fills the free intervals
+  first-fit and reports interval remainders that meet the offcut policy.
+
+Without pins `pinned-2d`/`pinned-1d` behave like the shelf/FFD baselines, which
+is why they have golden entries next to them. Unit tests cover lock retention,
+gap filling and determinism; the postgres integration test walks
+edit → version 2 → re-solve → version 3.
+
+## Costing the result
+
+`optimizer.Solve` attaches a `costing.Report` to every result, and archived
+plans recompute it when they are read: new material, remnants taken, offcut
+credit, the part/trim/kerf/scrap shares of the stock value, and cost per part
+and per m². Net cost is material taken minus the offcut credit (leftovers that
+stay in stock). The objective still scores geometry via `core.Score`; the cost
+report is the accounting view, so a cheap plan and a high-yield plan can be
+compared without guessing. See `internal/optimizer/costing`.
 
 ## Benchmark harness
 

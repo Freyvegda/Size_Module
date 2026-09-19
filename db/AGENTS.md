@@ -8,20 +8,26 @@ into `backend/internal/platform/db` (see `sqlc.yaml`).
 
 | Path | Purpose |
 |---|---|
-| `migrations/` | `0001_init.sql` and `0002_remnants.sql` (goose Up/Down) — 15 tables |
-| `queries/*.sql` | ~40 named sqlc queries (`jobs`, `materials`, `parts`, `plans`, `plant`, `stock_formats`, `stock_items`) |
-| `seeds/` | `0001_demo_data.sql` (plant, glass/alu materials, stock, parts, routing, rules profile, machine) + `0002_demo_remnants.sql` (local pool of labelled leftovers) |
+| `migrations/` | `0001_init.sql`, `0002_remnants.sql`, `0003_plan_edits.sql`, `0004_assemblies.sql` and `0005_campaigns.sql` (goose Up/Down) — 17 tables; `0006_assembly_materials.sql` links products to a material spec and adds component quantities |
+| `queries/*.sql` | ~50 named sqlc queries (`jobs`, `materials`, `parts`, `assemblies`, `plans`, `campaigns`, `plant`, `stock_formats`, `stock_items`, `kpis`) |
+| `seeds/` | `0001_demo_data.sql` (plant, glass/alu materials, stock, parts, routing, rules profile, machine) + `0002_demo_remnants.sql` (local pool of labelled leftovers) + `0003_demo_assemblies.sql` (a window with glass and frame beams) + `0004_demo_wood.sql` (wood family, Oak/Pine types, sheet stock) + `0005_demo_table.sql` (an oak table product) |
 | `tests/smoke.sql` | table tests (`\set ON_ERROR_STOP on`, DO blocks, rolled-back writes) |
 | `scripts/*.ps1` | day-to-day commands (below) |
 | `sqlc.yaml` | sqlc v2 config: schema = migrations, output = `../backend/internal/platform/db`, pgx/v5, UUID → google/uuid, numeric → float64 |
 
 Tables: `plants`, `users`, `materials`, `material_specs`, `machines`,
-`rules_profiles`, `stock_formats`, `parts`, `part_routings`, `cut_jobs`,
-`plans`, `plan_sheets`, `placements`, `audit_log`, `stock_items`.
+`rules_profiles`, `stock_formats`, `parts`, `part_routings`, `assemblies`,
+`assembly_components`, `cut_jobs`, `plans`, `plan_sheets`, `placements`,
+`audit_log`, `stock_items`, `campaigns`, `campaign_items`.
 
 The remnant lifecycle adds `stock_items` (physical pieces with label, status,
 lineage and prorated cost) plus `plan_sheets.stock_id` / `stock_item_id` and
-`plans.accepted_at`.
+`plans.accepted_at`. Plan editing adds `placements.locked` and
+`plans.parent_plan_id` (version lineage). Products add `assemblies` (overall
+size + kind) and `assembly_components` (role, kind, dimensions and offsets in
+the assembly's local frame). Campaign planning adds `campaigns` (shared stock
+budget as JSONB, status, rules) and `campaign_items` (ordered parts, due date,
+status, plan/job links).
 
 ## Working rules
 

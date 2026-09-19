@@ -6,11 +6,14 @@ not import each other; shared helpers live in `platform/httpx`.
 
 | Module | Files | Responsibilities | Store interface |
 |---|---|---|---|
-| `catalog` | `store.go` | materials + stock formats | `ListMaterials`, `CreateMaterial`, `ListStockFormats` |
+| `catalog` | `store.go` | materials, material types (specs) + stock formats | `ListMaterials`, `CreateMaterial`, `ListMaterialSpecs`, `CreateMaterialSpec`, `ListStockFormats`, `CreateStockFormat` |
 | `parts` | `store.go` | part catalog (finished sizes, allowance concept) | `ListParts`, `CreatePart` |
+| `assemblies` | `store.go` | product catalog: assemblies (overall size) + components (glass panels, frame beams) rendered in 2D/3D | `ListAssemblies`, `GetAssembly`, `CreateAssembly` |
 | `jobs` | `service.go`, `queue.go`, `worker.go`, `http.go` | solve orchestration, demo problems, run archiving, asynchronous queue + SSE progress, remnant injection | `SaveRun` (sync), `QueueStore` (async), `RemnantSource` (optional) |
 | `stock` | `store.go` | physical stock pieces: full pieces and labelled remnants | `ListItems`, `GetItem`, `CreateItem`, `UpdateItem` |
-| `plans` | `store.go`, `http.go` | archived plans (read) and acceptance | `ListPlans`, `GetPlan`, `AcceptPlan` |
+| `plans` | `store.go`, `http.go`, `edit.go` | archived plans (read), acceptance, validated edits, locked re-solve, exports | `ListPlans`, `GetPlan`, `AcceptPlan`, `SaveVersion` |
+| `campaigns` | `store.go`, `budget.go`, `http.go` | ordered jobs sharing one stock budget; `run-next` solves the next item and updates the budget | `ListCampaigns`, `GetCampaign`, `CreateCampaign`, `UpdateCampaign`, `AddItem`, `DeleteItem`, `NextItem`, `CompleteItem` |
+| `kpis` | `store.go` | realized-yield and costing aggregates over plan scorecards | `KPIs` |
 
 ## jobs
 
@@ -41,6 +44,20 @@ not import each other; shared helpers live in `platform/httpx`.
   dimension profile and appends them to the problem snapshot. A nil source (no
   database) skips the lookup; a lookup error is a `500 remnant_lookup_failed`.
 
+## assemblies
+
+- A product is an overall size plus an ordered list of `components`. Each
+  component is a box in the assembly's local frame (origin bottom-left-front,
+  x right, y up, z out of the wall), so the same data drives the 2D elevation
+  and the 3D scene on the Products page.
+- `POST /assemblies` writes the assembly and all components in one transaction;
+  `kind` is `window | door | generic` and a component kind is
+  `beam | panel | custom`. The product optionally binds to a `materialSpecId`
+  (the default for its components) and a component carries a `quantity`.
+- Assemblies are still not solved directly: the frontend explodes components
+  into cut parts (Products → Run cut plan) and posts that problem to
+  `/optimize`. The API only stores and serves the definition.
+
 ## stock
 
 - One physical piece per row: full sheet/bar or labelled remnant, with status
@@ -53,15 +70,50 @@ not import each other; shared helpers live in `platform/httpx`.
 
 ## plans
 
-- `GET /plans` lists summaries; `GET /plans/{id}` rebuilds the stored layout into
-  the same `OptimizeResult` shape as a fresh solve (the archived result JSON is
-  preferred; a reconstruction with `validator.Validate` + `core.Score` is the
-  fallback).
+- `GET /plans` lists summaries; `GET /plans/{id}` rebuilds the stored layout
+  into the same `OptimizeResult` shape as a fresh solve, with per-placement
+  `id`/`locked` values and the plan rules.
 - `POST /plans/{id}/accept` is the lifecycle step: in one transaction it consumes
   the physical pieces the plan used, decrements `stock_formats.on_hand_qty`
   (never below zero), registers every reusable offcut as a labelled remnant
   (`OFF-…`, prorated cost, plan/sheet lineage), marks the plan `accepted` and
   writes an `audit_log` entry. Accepting twice → `409 not_acceptable`.
+- `POST /plans/{id}/edit` applies move/rotate/lock/delete operations, re-runs
+  `validator.Validate` plus an edge-trim check and stores the result as the next
+  version (`plans.version + 1`, `parent_plan_id`, source archived). A layout that
+  cannot be produced → `422 edit_invalid` with the violation list.
+- `POST /plans/{id}/reoptimize` builds `core.PinnedSheet`s from the locked
+  placements, runs the solver (registry picks a pinned-capable one) and stores
+  the next version. `pinned-2d`/`pinned-1d` keep locks exactly in place.
+- `GET /plans/{id}/exports?format=…` streams CSV/SVG/DXF/PDF from
+  `internal/optimizer/export`; `sheet=` selects one sheet.
+- Only `draft`/`approved` plans can be edited or accepted; accepted/archived
+  plans are frozen.
+
+## kpis
+
+- `GET /kpis?days=90` (or `from`/`to`, RFC3339 or `YYYY-MM-DD`) aggregates the
+  JSONB scorecards stored on plans: `realized` = accepted plans, `created` =
+  all plans in the window, `series` = accepted plans over time.
+- Yield/waste/cost-per-part are derived in the store, never stored twice, so the
+  dashboard always agrees with a plan's own scorecard.
+- Nil store (no database) answers `503 database_unavailable` like every other
+  read endpoint.
+
+## campaigns
+
+- A campaign is an ordered set of items (jobs) plus one shared stock budget
+  (`stock` JSONB, with `initial_stock` kept for reference).
+- `POST /campaigns/{id}/run-next` solves the earliest pending item with
+  `BuildItemProblem` (item parts + remaining budget + campaign rules/objective,
+  seed + item seq), then `ConsumeBudget` shrinks the budget and returns the
+  offcuts as labelled `CMP-…` remnants with prorated cost. `CompleteItem` stores
+  job + plan + item status + budget in one transaction under a campaign row
+  lock, and derives the status: `active` after the first run, `completed` when
+  nothing is pending.
+- `budget.go` is pure and unit-tested: budget arithmetic needs no database.
+- Only `draft`/`active` campaigns accept items or runs; the budget is a planning
+  sandbox — accepting a plan is still what changes plant stock.
 
 ## Patterns
 

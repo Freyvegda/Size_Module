@@ -1,0 +1,148 @@
+Decisions locked. Here is the plan re-scoped to exactly those choices: cutting + nesting v1, single-plant self-hosted, pure-Go solvers, material-agnostic domain.
+V1 Plan — "Cut Optimizer" (generic materials, single plant, pure Go)
+1. What changed because of your answers
+Decision	Consequence
+Cutting + nesting only	No inventory transactions, remnant lifecycle, cost engine, MRP, ERP in v1. Demand enters as a simple parts list + quantities.
+Single plant, self-hosted	No multi-tenancy, no OIDC, no k8s. One docker-compose.yml, local users + sessions. Still keep plant_id columns for the future.
+Pure Go first	No CGO, no OR-Tools. go build gives one static binary. CP-SAT stays a documented future sidecar.
+Generic from day 1	Domain model has no glass/wood/metal specifics. All vertical behavior lives in rules profiles (kerf, trim, rotation, grain, guillotine mode). Glass is just a seeded rules preset.
+One more simplification this unlocks: drop Redis in v1. Postgres alone can do the job queue (SELECT … FOR UPDATE SKIP LOCKED), job progress (LISTEN/NOTIFY), and caching. One less service to run at a plant.
+2. V1 scope boundary
+In scope
+- Material catalog → stock formats (available sizes, on-hand qty, cost) → parts (with cut-size allowances via routings)
+- Constraint rules profiles + objective presets, reusable per job
+- 1D cutting solver (bars/profiles) and 2D guillotine + free-rect solver (sheets)
+- Any-time job execution with live best-so-far streaming (SSE)
+- Plan viewer (2D SVG): sheets, placements, kerf, trim, waste overlay, metrics, per-sheet thumbnails
+- Plan validation (overlap/bounds/grain/kerf/guillotine cut-tree), explanation (waste split, baseline delta)
+- Manual plan edits + locked placements + re-solve
+- Exports: PDF cut list, SVG/DXF sheet layout, CSV
+- CSV import for parts/stock; simple stock decrement on plan accept
+- Minimal 3D tab (exploded sheet stack in R3F) — small, high wow, lazy-loaded
+- Roles: admin, planner, viewer. Audit log of mutations.
+Out of scope (backlog after v1)
+Remnant lifecycle & labels, shop-floor PWA, orders/customers module, costing & KPI dashboards, machine control formats, defect maps, campaign scheduling, ribbon/batch make-stage, ERP/CAD integrations, multi-plant, SSO, irregular polygon nesting, 3D bin packing.
+3. Architecture (v1, simplified)
+            ┌──────────────────────────────────────────────┐
+            │  Go binary (single process, single static)   │
+            │                                              │
+ Browser ───┼─► chi router ── REST /v1/*  (OpenAPI)        │
+  (React)   │        │                                     │
+            │        ├─ SSE /v1/jobs/{id}/events           │
+            │        │                                     │
+            │        ├─ modules: catalog · stock · parts   │
+            │        │           jobs · plans · exports    │
+            │        │                                     │
+            │        └─ embedded worker pool (GOMAXPROCS)  │
+            │               └─ internal/optimizer/*        │
+            │                    (pure Go, no DB/HTTP)     │
+            └───────────────┬──────────────────────────────┘
+                            │ pgx + sqlc
+                     ┌──────▼──────┐
+                     │ PostgreSQL  │  jobs, plans (JSONB), NOTIFY
+                     └─────────────┘
+   Frontend: built to /dist, served by the same binary (embed.FS) in prod
+Repo layout (what to create, file-level):
+backend/
+  cmd/cutoptics/main.go              # api + worker + static files + migrations
+  internal/platform/{config,http,postgres,events,telemetry,id,units,errors}
+  internal/modules/
+    catalog/{domain,app,adapters}    # materials, specs, stock formats, machines
+    parts/{domain,app,adapters}      # parts, routings, allowances, imports
+    jobs/{domain,app,adapters}       # job snapshot, queue, SSE, progress
+    plans/{domain,app,adapters}      # plans, placements, edits, exports, accept
+    identity/{domain,app,adapters}   # users, sessions, roles, audit
+  internal/optimizer/
+    core/            # Problem, Solution, Rules, Objective, Solver, scoring, seed
+    geom/            # rect math, free-rect list, polygon interfaces, cut tree
+    pack1d/          # FFD/BFD → column generation + DP pricing
+    pack2d/          # guillotine beam search, MaxRects, shelf fallback
+    cutter/          # cut tree → step list
+    validator/       # invariants + guillotine feasibility
+    explain/         # waste breakdown, baseline comparison
+  api/openapi.yaml
+  migrations/
+  testdata/benchmarks/{esicup,internal}/*.json
+frontend/
+  src/{app,routes,features,components/ui,lib,api}
+  # features: materials, stock, parts, jobs(wizard+progress), plans(2d editor, 3d, exports)
+deploy/compose/docker-compose.yml
+docs/{glossary.md, solver.md, adr/}
+Units rule (non-negotiable): every length is int64 micrometers in DB, API, and solver. Floats only for percentages/cost. Frontend converts at the edge and displays mm/inches.
+Deliverable contract: OpenAPI-first — hand-write api/openapi.yaml, generate Go server types (oapi-codegen) and the TS client (openapi-typescript/orval) in CI. No hand-written API types on either side.
+4. Domain model, rules, objective (v1 spec)
+Tables: plants, users, sessions, materials, material_specs, stock_formats, machines, parts, part_routings, rules_profiles, cut_jobs, job_events, plans, plan_sheets, placements, plan_metrics, plan_versions, exports, audit_log.
+Generic model, no vertical leakage:
+- materials — family name, dimension profile (1D/2D), attributes JSONB
+- material_specs — thickness, surface/finish, grade, color — whatever the material needs (JSONB attributes + indexed core fields)
+- stock_formats — nominal W×H (or length), cost, on-hand qty, quality flags, allowed machines
+- parts — code, spec ref, finished dimensions, grain requirement, qty, rotate override, priority, source ref
+- part_routings — operations → allowance (e.g. "grind: 2 mm/side", "edge delete: 1 mm"), ordered; cut size is computed, never typed
+- rules_profiles — named reusable constraint set (below)
+Rules profile fields (v1):
+kerfMicron, trimPerEdgeMicron, allowRotate, grainMode (none/alongX/alongY), cutMode (guillotine/free), maxCutStages, minOffcutWMicron, minOffcutHMicron, minPartDimMicron, maxPartsPerSheet, edgeExclusionMicron, oversAllowedPct, machineLimits.
+Objective (v1): ordered priority list chosen per job, default:
+1. maximize priority-demand fulfilment (overs allowed within oversAllowedPct)
+2. minimize sheets used
+3. minimize unusable scrap area
+4. minimize distinct patterns
+5. minimize offcut count
+Solution output: sheets[] (stock ref, placements, per-sheet stats), metrics (yield %, scrap/offcut/kerf/trim areas, sheets used, cost, elapsed), unplaced[], cutTree, warnings[], explanation{} (waste split, delta vs greedy baseline, binding constraint).
+Solver interface (the seam that keeps everything future-proof):
+type Solver interface {
+    Name() string
+    Capabilities() Capabilities           // 1D/2D, free/guillotine, polygons, rotation, grain
+    Solve(ctx context.Context, p core.Problem, progress func(core.Solution)) (core.Solution, error)
+}
+Registration via a small registry keyed by capabilities, so adding pack3d or a CP-SAT sidecar later is a drop-in.
+5. Solver strategy (pure Go, v1)
+Build algorithm-first as a CLI spike before any web work — it's the only genuinely risky part.
+Order	Component	What to implement
+1	core + validator	Problem/Solution types, scoring, deterministic seed, invariants incl. guillotine cut-tree feasibility
+2	pack1d	FFD/BFD baseline → DP knapsack pricing + column generation; leftover handling
+3	pack2d	MaxRects/shelf baseline → guillotine beam search over cut trees → LP rounding + bin consolidation → local-search polish
+4	cutter	Cut tree → operator steps; SVG/DXF/CSV writers
+5	explain	Waste accounting, baseline comparison, binding-constraint notes
+6	cmd/cutoptics bench	Runs ESICUP + internal instances, prints waste % table, fails CI on regression
+Any-time behavior: the interface above reports best-so-far through progress; the API forwards it over SSE. Interactive budget 1–10 s, "night run" budget minutes. Same inputs + seed + solver version ⇒ byte-identical plan (store both on the plan row).
+Quality bar: ≤200 parts in <5 s; waste within 5% of benchmark best-known on the golden set; zero invalid plans ever shown.
+6. API and frontend map (v1)
+Endpoint	Purpose
+POST /v1/jobs	Submit: parts+qtys (or source part list), stock refs, rules profile, objective, budgetMs, seed. Server snapshots inputs into the job row
+GET /v1/jobs/{id} · GET /v1/jobs/{id}/events (SSE) · POST /v1/jobs/{id}/cancel	Status, live best-so-far, cancel
+GET /v1/plans/{id} · POST /v1/plans/{id}/edit · POST /v1/plans/{id}/reoptimize	View, manual edits + locks, re-solve with locks
+POST /v1/plans/{id}/accept	Simple stock decrement + plan frozen as version 1
+POST /v1/plans/{id}/exports	pdf | svg | dxf | csv
+CRUD /v1/materials · /v1/material-specs · /v1/stock-formats · /v1/parts · /v1/rules-profiles · /v1/machines	Master data
+POST /v1/imports/parts …/stock	CSV with per-row error report
+Frontend routes: /login, /materials, /stock, /parts, /rules, /jobs (wizard), /jobs/:id (live progress with shrinking waste %), /plans/:id (2D SVG editor: pan/zoom, drag, rotate, lock, ruler, kerf/trim overlay, color-by-order/part/waste, sheet thumbnails, metrics panel, export menu, 3D tab), /settings/users, /audit.
+Stack detail: TanStack Query for all server state; Zustand only inside the plan editor; forms via react-hook-form + zod generated from OpenAPI; TanStack Table for grids; 2D layout in SVG (switch to Canvas only if polygon nesting arrives); three.js/R3F lazy-loaded in its own chunk, instanced meshes, glass via MeshPhysicalMaterial.
+7. Delivery plan (≈12 weeks, 2 devs)
+Milestone	~Weeks	Tasks	Exit criteria
+M0 Foundations	1.5	Install Go (latest stable via winget install GoLang.Go) + pnpm workspace; repo skeleton; docker-compose (api+postgres); migrations; CI (lint, test, OpenAPI drift); auth/sessions/RBAC; audit table	docker compose up gives a login page; CI green
+M1 Solver spike (CLI only)	2.5	core, geom, pack1d, pack2d baseline+beam search, validator, cutter, bench harness, ESICUP instances in testdata/	200-part instance <5 s, valid plans only, waste ≤ greedy+5% baseline, bench report committed
+M2 Master data + jobs API	2	Catalog/parts/routings CRUD; cut-size calculator; rules profiles; jobs table + queue (SKIP LOCKED); worker pool; SSE via LISTEN/NOTIFY; job wizard UI	Submit from UI → progress streams → plan row persisted with metrics
+M3 Plan viewer + exports	2.5	2D SVG viewer/editor; locks + re-solve; explainer panel; PDF/SVG/DXF/CSV exports; accept→stock decrement; versions	Planner creates, edits, locks, re-solves, exports, accepts a plan end-to-end
+M4 Polish + pilot	2.5	CSV imports with error reports; dashboard (basic yield numbers); 3D stack tab; performance pass; Playwright + k6 gates; seed demo data; plant pilot with real data	Real plant dataset produces acceptable plans; all quality gates pass
+M5 Hardening	1	Property/fuzz coverage on geometry+parsers; regression gate on benchmark waste %; backup/restore runbook; docs (glossary, solver notes, ADRs)	Documented restore drill; CI blocks any >0.5% waste regression
+Parallelization: one dev owns M1→M2 backend/solver continuously; the other builds UI shell + master-data screens against the OpenAPI stub from M0's first week, so nothing blocks.
+8. Quality gates (definition of done for anything solver-related)
+1. Property tests (rapid): random instances → no overlap, in bounds, kerf/grain/trim respected, counts ≤ demand, guillotine cut tree valid.
+2. Golden plans: fixed seed ⇒ identical output; changes to this file require an ADR note.
+3. Fuzz parsers (CSV/DXF) and polygon/rect geometry.
+4. Benchmark gate: bench fails CI if waste % on the golden set worsens >0.5%.
+5. E2E: import → job → view → lock-edit → re-solve → export → accept.
+6. Every plan carries solver_version + seed; UI always shows the greedy-baseline delta so "optimal-looking" plans are never oversold.
+9. Top v1 risks
+Risk	Mitigation
+Solver quality disappoints on real data	Bench harness exists from M1; any-time + baseline delta means even mediocre solves look honest; hard cases → planned CP-SAT sidecar
+Guillotine-feasible-but-uncuttable layouts	Cut-tree validator is mandatory before any plan is stored
+Cut-size vs finished-size confusion	Allowances only from routing; cut size computed; UI shows both
+Generic model drifting into glass-only hacks	Vertical behavior only inside rules profiles; glass preset shipped as seed data, not code branches
+Plant data quality	Import with per-row error reports; validation on save; pilot dataset in M4
+10. Immediate next steps
+1. Install Go, then scaffold backend/ module + frontend/ Vite app + deploy/compose (M0).
+2. Write docs/glossary.md (material, spec, stock format, part, allowance, cut size, kerf, trim, offcut, pattern, placement, plan, rules profile) — this prevents 90% of naming drift later.
+3. Write the OpenAPI file for the v1 endpoints above; generate both clients; commit the drift check.
+4. Build the M1 solver spike CLI, because that is where the project's value and risk both live.
+If you'd like, I can save this plan to a file (I'd put it in C:\Users\LENOVO\.opencode\plan\size-module-v1.md) — just say the word. When you're ready to start building, switch out of Plan mode and I'll scaffold M0.
