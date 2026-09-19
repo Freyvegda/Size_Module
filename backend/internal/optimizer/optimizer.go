@@ -8,17 +8,20 @@ import (
 	"fmt"
 
 	"github.com/size-module/backend/internal/optimizer/core"
+	"github.com/size-module/backend/internal/optimizer/costing"
 	"github.com/size-module/backend/internal/optimizer/explain"
 	"github.com/size-module/backend/internal/optimizer/pack1d"
 	"github.com/size-module/backend/internal/optimizer/pack2d"
 	"github.com/size-module/backend/internal/optimizer/validator"
 )
 
-// Result is a complete answer: the layout, its scorecard and any violations.
+// Result is a complete answer: the layout, its scorecard, its cost breakdown
+// and any violations.
 type Result struct {
 	Solution   core.Solution         `json:"solution"`
 	Violations []validator.Violation `json:"violations,omitempty"`
 	Score      float64               `json:"score"`
+	Cost       costing.Report        `json:"cost"`
 }
 
 // DefaultRegistry registers the solvers shipped with the baseline. Rank order
@@ -27,12 +30,14 @@ func DefaultRegistry() *core.Registry {
 	r := core.NewRegistry()
 	r.Register(pack1d.New())
 	r.Register(pack1d.NewColumn())
+	r.Register(pack1d.NewPinned())
 	r.Register(pack1d.NewPortfolio(pack1d.New(), pack1d.NewColumn()))
 	r.Register(pack2d.New())
 	r.Register(pack2d.NewBeam())
 	r.Register(pack2d.NewColumn())
 	r.Register(pack2d.NewPolish())
 	r.Register(pack2d.NewMaxRects())
+	r.Register(pack2d.NewPinned())
 	r.Register(pack2d.NewPortfolio(pack2d.New(), pack2d.NewBeam(), pack2d.NewColumn(), pack2d.NewPolish(), pack2d.NewMaxRects()))
 	return r
 }
@@ -62,6 +67,9 @@ func Solve(ctx context.Context, p core.Problem, solverName string, reg *core.Reg
 			return Result{}, fmt.Errorf("solver %q produces %s layouts, but the rules require %s",
 				solverName, caps.CutMode, p.Rules.CutMode)
 		}
+		if len(p.Pinned) > 0 && !caps.Pinned {
+			return Result{}, fmt.Errorf("solver %q does not support pinned (locked) placements", solverName)
+		}
 	} else {
 		solver, err = reg.ForProblem(p)
 		if err != nil {
@@ -80,6 +88,7 @@ func Solve(ctx context.Context, p core.Problem, solverName string, reg *core.Reg
 		Solution:   sol,
 		Violations: violations,
 		Score:      core.Score(p, sol.Metrics),
+		Cost:       costing.Breakdown(p, sol),
 	}, nil
 }
 

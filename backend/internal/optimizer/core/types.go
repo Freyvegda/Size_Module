@@ -250,6 +250,9 @@ type Problem struct {
 	Stocks    []StockItem `json:"stocks"`
 	Rules     Rules       `json:"rules"`
 	Objective Objective   `json:"objective"`
+	// Pinned holds planner-locked sheet layouts a re-solve must preserve. A
+	// solver without Capabilities.Pinned must not serve a problem with pins.
+	Pinned []PinnedSheet `json:"pinned,omitempty"`
 	// BudgetMS is the soft time budget. Solvers must return their best
 	// solution when the budget expires instead of failing.
 	BudgetMS int    `json:"budgetMs,omitempty"`
@@ -258,6 +261,9 @@ type Problem struct {
 
 // Placement is one part placed on one sheet.
 type Placement struct {
+	// ID identifies a stored placement when a plan is read back for editing;
+	// solvers leave it empty.
+	ID       string `json:"id,omitempty"`
 	PartID   string `json:"partId"`
 	PartCode string `json:"partCode"`
 	X        Dim    `json:"x"`
@@ -266,6 +272,9 @@ type Placement struct {
 	H        Dim    `json:"h"`
 	Rotated  bool   `json:"rotated"`
 	Priority int    `json:"priority,omitempty"`
+	// Locked marks a placement a planner pinned: a re-solve must keep it
+	// exactly where it is.
+	Locked bool `json:"locked,omitempty"`
 }
 
 // SheetPlan is the cutting layout of a single stock sheet.
@@ -289,6 +298,21 @@ type UnplacedPart struct {
 	PartCode string `json:"partCode"`
 	Quantity int    `json:"quantity"`
 	Reason   string `json:"reason"`
+}
+
+// PinnedSheet is a sheet whose pieces a planner locked: a re-solve must keep
+// these placements exactly where they are and pack the remaining demand around
+// them. The solver materialises one sheet per pinned entry, so a pinned sheet
+// occupies one copy of its stock.
+type PinnedSheet struct {
+	StockID   string `json:"stockId,omitempty"`
+	StockCode string `json:"stockCode,omitempty"`
+	Label     string `json:"label,omitempty"`
+	Width     Dim    `json:"width"`
+	Height    Dim    `json:"height"`
+	// Placements are the locked pieces. They must already honour the kerf,
+	// bounds and guillotine rules of the problem; re-solving never moves them.
+	Placements []Placement `json:"placements"`
 }
 
 // Metrics is the scorecard of a solution. Areas are in square meters, lengths

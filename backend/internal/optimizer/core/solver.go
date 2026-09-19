@@ -15,7 +15,10 @@ type Capabilities struct {
 	Rotation  bool
 	Grain     bool
 	Remnants  bool
-	MaxParts  int
+	// Pinned marks solvers that can honour Problem.Pinned (planner-locked
+	// placements). A re-solve only considers solvers with this capability.
+	Pinned   bool
+	MaxParts int
 	// Rank orders solvers that serve the same dimension profile: lower is
 	// preferred when the caller does not name a solver. 0 means unranked and
 	// sorts last.
@@ -106,15 +109,35 @@ func (r *Registry) ForProfile(profile DimensionProfile) (Solver, error) {
 func (r *Registry) ForProblem(p Problem) (Solver, error) {
 	profile := DetectProfile(p)
 	candidates := r.candidates(profile, p.Rules.CutMode)
+	if len(p.Pinned) > 0 {
+		candidates = pinnedCandidates(candidates)
+	}
 	if len(candidates) == 0 {
 		// Nothing matches the cut mode exactly; fall back to the best solver
 		// for the profile rather than refusing to solve.
 		candidates = r.candidates(profile, "")
+		if len(p.Pinned) > 0 {
+			candidates = pinnedCandidates(candidates)
+		}
 	}
 	if len(candidates) == 0 {
+		if len(p.Pinned) > 0 {
+			return nil, fmt.Errorf("no solver registered for %q problems with pinned placements", profile)
+		}
 		return nil, fmt.Errorf("no solver registered for dimension profile %q", profile)
 	}
 	return candidates[0], nil
+}
+
+// pinnedCandidates keeps only solvers that can honour locked placements.
+func pinnedCandidates(candidates []Solver) []Solver {
+	out := candidates[:0:0]
+	for _, s := range candidates {
+		if s.Capabilities().Pinned {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // candidates returns the solvers serving a profile, optionally restricted to a
