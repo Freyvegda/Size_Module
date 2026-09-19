@@ -81,3 +81,29 @@ func TestOverlapIsAlwaysRejected(t *testing.T) {
 		t.Fatalf("expected an overlap violation, got %v", found)
 	}
 }
+
+func TestDefectOverlapIsRejected(t *testing.T) {
+	parts := []core.Part{{ID: "a", Code: "A", Width: core.FromMM(400), Height: core.FromMM(400), Quantity: 1}}
+	stocks := []core.StockItem{{
+		ID: "s", Code: "REMNANT", Width: core.FromMM(1000), Height: core.FromMM(1000), Quantity: 1,
+		Defects: []core.Rect{{X: core.FromMM(100), Y: core.FromMM(100), W: core.FromMM(300), H: core.FromMM(300)}},
+	}}
+	rules := core.Rules{Kerf: 0, Trim: 0, AllowRotate: true, CutMode: core.CutFree}
+	p := core.Normalize(core.Problem{Parts: parts, Stocks: stocks, Rules: rules})
+
+	overlapping := core.Solution{Sheets: []core.SheetPlan{{
+		Index: 0, StockID: "s", Width: core.FromMM(1000), Height: core.FromMM(1000),
+		Placements: []core.Placement{{PartID: "a", PartCode: "A", X: core.FromMM(150), Y: core.FromMM(150), W: core.FromMM(400), H: core.FromMM(400)}},
+	}}}
+	if !codes(Validate(p, overlapping))["defect_overlap"] {
+		t.Fatalf("expected defect_overlap when a piece covers a defect")
+	}
+
+	clear := core.Solution{Sheets: []core.SheetPlan{{
+		Index: 0, StockID: "s", Width: core.FromMM(1000), Height: core.FromMM(1000),
+		Placements: []core.Placement{{PartID: "a", PartCode: "A", X: core.FromMM(500), Y: core.FromMM(500), W: core.FromMM(400), H: core.FromMM(400)}},
+	}}}
+	if codes(Validate(p, clear))["defect_overlap"] {
+		t.Fatalf("did not expect defect_overlap for a piece clear of the defect")
+	}
+}

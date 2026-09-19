@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -33,7 +34,7 @@ func (s *Store) ListItems(ctx context.Context, filter stock.ListFilter) ([]stock
 	for _, r := range rows {
 		out = append(out, toStockItem(r.ID, r.FormatID, r.Code, r.Label, r.LengthUm, r.WidthUm, r.HeightUm,
 			r.IsRemnant, r.Status, r.Location, r.CostPerUnit, r.Notes, r.ParentPlanID, r.ParentSheetIndex,
-			r.ConsumedByPlanID, r.ConsumedAt, r.CreatedAt, r.FormatCode, r.SpecCode, r.MaterialCode, r.DimensionProfile))
+			r.ConsumedByPlanID, r.ConsumedAt, r.CreatedAt, r.FormatCode, r.SpecCode, r.MaterialCode, r.DimensionProfile, r.Defects))
 	}
 	return out, nil
 }
@@ -53,7 +54,7 @@ func (s *Store) GetItem(ctx context.Context, id string) (stock.Item, error) {
 	}
 	return toStockItem(r.ID, r.FormatID, r.Code, r.Label, r.LengthUm, r.WidthUm, r.HeightUm,
 		r.IsRemnant, r.Status, r.Location, r.CostPerUnit, r.Notes, r.ParentPlanID, r.ParentSheetIndex,
-		r.ConsumedByPlanID, r.ConsumedAt, r.CreatedAt, r.FormatCode, r.SpecCode, r.MaterialCode, r.DimensionProfile), nil
+		r.ConsumedByPlanID, r.ConsumedAt, r.CreatedAt, r.FormatCode, r.SpecCode, r.MaterialCode, r.DimensionProfile, r.Defects), nil
 }
 
 // CreateItem registers a physical piece. When a format is referenced, missing
@@ -106,6 +107,10 @@ func (s *Store) CreateItem(ctx context.Context, in stock.CreateInput) (stock.Ite
 		isRemnant = *in.IsRemnant
 	}
 
+	if err := stock.ValidateDefects(in.Defects, width, height); err != nil {
+		return stock.Item{}, err
+	}
+
 	row, err := s.queries.CreateStockItem(ctx, db.CreateStockItemParams{
 		PlantID:     plant.ID,
 		FormatID:    formatID,
@@ -119,6 +124,7 @@ func (s *Store) CreateItem(ctx context.Context, in stock.CreateInput) (stock.Ite
 		Location:    in.Location,
 		CostPerUnit: cost,
 		Notes:       in.Notes,
+		Defects:     marshalRects(in.Defects),
 	})
 	if err != nil {
 		return stock.Item{}, err
@@ -126,23 +132,34 @@ func (s *Store) CreateItem(ctx context.Context, in stock.CreateInput) (stock.Ite
 	return s.GetItem(ctx, row.ID.String())
 }
 
-// UpdateItem patches label, location, status and notes of a piece.
+// UpdateItem patches label, location, status, notes and defects of a piece.
 func (s *Store) UpdateItem(ctx context.Context, id string, in stock.UpdateInput) (stock.Item, error) {
 	parsed, err := uuid.Parse(id)
 	if err != nil {
 		return stock.Item{}, stock.ErrNotFound
 	}
-	if _, err := s.queries.GetStockItem(ctx, parsed); errors.Is(err, pgx.ErrNoRows) {
+	current, err := s.queries.GetStockItem(ctx, parsed)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return stock.Item{}, stock.ErrNotFound
 	} else if err != nil {
 		return stock.Item{}, err
 	}
+
+	var defects []byte
+	if in.Defects != nil {
+		if err := stock.ValidateDefects(*in.Defects, current.WidthUm, current.HeightUm); err != nil {
+			return stock.Item{}, err
+		}
+		defects = marshalRects(*in.Defects)
+	}
+
 	if _, err := s.queries.UpdateStockItem(ctx, db.UpdateStockItemParams{
 		ID:       parsed,
 		Label:    in.Label,
 		Location: in.Location,
 		Status:   in.Status,
 		Notes:    in.Notes,
+		Defects:  defects,
 	}); err != nil {
 		return stock.Item{}, err
 	}
@@ -183,6 +200,7 @@ func (s *Store) ListRemnants(ctx context.Context, materialSpecID string) ([]core
 			Quantity:    1,
 			CostPerUnit: r.CostPerUnit,
 			IsRemnant:   true,
+			Defects:     unmarshalRects(r.Defects),
 		}
 		if r.FormatID.Valid {
 			item.FormatID = uuid.UUID(r.FormatID.Bytes).String()
@@ -224,6 +242,7 @@ func toStockItem(
 	consumedByPlanID pgtype.UUID,
 	consumedAt, createdAt pgtype.Timestamptz,
 	formatCode, specCode, materialCode, dimensionProfile *string,
+	defects []byte,
 ) stock.Item {
 	item := stock.Item{
 		ID:           id.String(),
@@ -265,5 +284,30 @@ func toStockItem(
 	if dimensionProfile != nil {
 		item.DimensionProfile = *dimensionProfile
 	}
+	item.Defects = unmarshalRects(defects)
 	return item
+}
+
+// marshalRects serialises defect rectangles as a JSON array; an empty list is
+// stored as [] rather than NULL so the column stays a JSON array.
+func marshalRects(rects []core.Rect) []byte {
+	if len(rects) == 0 {
+		return []byte("[]")
+	}
+	data, err := json.Marshal(rects)
+	if err != nil {
+		return []byte("[]")
+	}
+	return data
+}
+
+func unmarshalRects(data []byte) []core.Rect {
+	if len(data) == 0 {
+		return nil
+	}
+	var rects []core.Rect
+	if err := json.Unmarshal(data, &rects); err != nil {
+		return nil
+	}
+	return rects
 }

@@ -1694,6 +1694,10 @@ components:
         consumedByPlanId: { type: string, format: uuid }
         consumedAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
+        defects:
+          type: array
+          description: Unusable regions of the piece (knots, cracks, scratches); solvers avoid them.
+          items: { $ref: "#/components/schemas/Rect" }
 
     CreateStockPieceInput:
       type: object
@@ -1709,6 +1713,10 @@ components:
         location: { type: string }
         costPerUnit: { type: number }
         notes: { type: string }
+        defects:
+          type: array
+          description: Unusable regions of the piece, in piece-local micrometers.
+          items: { $ref: "#/components/schemas/Rect" }
 
     UpdateStockPieceInput:
       type: object
@@ -1717,6 +1725,10 @@ components:
         location: { type: string }
         status: { type: string, enum: [available, reserved, retired] }
         notes: { type: string }
+        defects:
+          type: array
+          description: Replaces the defect map when present; use an empty array to clear it.
+          items: { $ref: "#/components/schemas/Rect" }
 
     RemnantRef:
       type: object

@@ -8,6 +8,7 @@ package stock
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/size-module/backend/internal/optimizer/core"
 	"github.com/size-module/backend/internal/platform/httpx"
 )
 
@@ -52,6 +54,9 @@ type Item struct {
 	ConsumedByPlanID string     `json:"consumedByPlanId,omitempty"`
 	ConsumedAt       *time.Time `json:"consumedAt,omitempty"`
 	CreatedAt        time.Time  `json:"createdAt"`
+	// Defects are unusable regions of the piece (knots, cracks, scratches).
+	// Solvers avoid them and the validator rejects any piece placed over one.
+	Defects []core.Rect `json:"defects,omitempty"`
 }
 
 // ListFilter narrows the stock pool listing.
@@ -73,6 +78,8 @@ type CreateInput struct {
 	Location     string  `json:"location"`
 	CostPerUnit  float64 `json:"costPerUnit"`
 	Notes        string  `json:"notes"`
+	// Defects are unusable regions of the piece, in piece-local coordinates.
+	Defects []core.Rect `json:"defects,omitempty"`
 }
 
 // UpdateInput patches the mutable fields of a piece. Nil fields are left
@@ -82,6 +89,9 @@ type UpdateInput struct {
 	Location *string `json:"location"`
 	Status   *string `json:"status"`
 	Notes    *string `json:"notes"`
+	// Defects replaces the piece's defect map when present (use an empty array
+	// to clear it). Omitting the field leaves the current defects unchanged.
+	Defects *[]core.Rect `json:"defects,omitempty"`
 }
 
 // Store is implemented by the postgres package.
@@ -168,6 +178,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 			"a piece needs a positive length (1d) or a positive width and height (2d)")
 		return
 	}
+	if err := ValidateDefects(in.Defects, in.WidthMicron, in.HeightMicron); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid_input", err.Error())
+		return
+	}
 	if in.CostPerUnit < 0 {
 		httpx.Error(w, http.StatusBadRequest, "invalid_input", "costPerUnit cannot be negative")
 		return
@@ -228,4 +242,23 @@ func knownStatus(status string) bool {
 
 func validDimensions(length, width, height int64) bool {
 	return length > 0 || (width > 0 && height > 0)
+}
+
+// ValidateDefects checks that every defect rectangle is well formed, and — when
+// the piece dimensions are known — that it lies inside the piece. A defect is a
+// 2D region: a 1D piece (a bar) cannot carry one.
+func ValidateDefects(defects []core.Rect, width, height int64) error {
+	hasBounds := width > 0 && height > 0
+	for i, d := range defects {
+		if d.W <= 0 || d.H <= 0 {
+			return fmt.Errorf("defect %d must have a positive width and height", i+1)
+		}
+		if d.X < 0 || d.Y < 0 {
+			return fmt.Errorf("defect %d has a negative position", i+1)
+		}
+		if hasBounds && (d.X+d.W > width || d.Y+d.H > height) {
+			return fmt.Errorf("defect %d extends beyond the piece", i+1)
+		}
+	}
+	return nil
 }

@@ -37,10 +37,10 @@ const createStockItem = `-- name: CreateStockItem :one
 INSERT INTO stock_items (
     plant_id, format_id, code, label, length_um, width_um, height_um,
     is_remnant, status, location, cost_per_unit, notes,
-    parent_plan_id, parent_sheet_index
+    parent_plan_id, parent_sheet_index, defects
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-RETURNING id, plant_id, format_id, code, label, length_um, width_um, height_um, is_remnant, status, location, cost_per_unit, notes, parent_plan_id, parent_sheet_index, consumed_by_plan_id, consumed_at, created_at, updated_at
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+RETURNING id, plant_id, format_id, code, label, length_um, width_um, height_um, is_remnant, status, location, cost_per_unit, notes, parent_plan_id, parent_sheet_index, consumed_by_plan_id, consumed_at, created_at, updated_at, defects
 `
 
 type CreateStockItemParams struct {
@@ -58,6 +58,7 @@ type CreateStockItemParams struct {
 	Notes            string      `json:"notes"`
 	ParentPlanID     pgtype.UUID `json:"parent_plan_id"`
 	ParentSheetIndex *int32      `json:"parent_sheet_index"`
+	Defects          []byte      `json:"defects"`
 }
 
 func (q *Queries) CreateStockItem(ctx context.Context, arg CreateStockItemParams) (StockItem, error) {
@@ -76,6 +77,7 @@ func (q *Queries) CreateStockItem(ctx context.Context, arg CreateStockItemParams
 		arg.Notes,
 		arg.ParentPlanID,
 		arg.ParentSheetIndex,
+		arg.Defects,
 	)
 	var i StockItem
 	err := row.Scan(
@@ -98,13 +100,14 @@ func (q *Queries) CreateStockItem(ctx context.Context, arg CreateStockItemParams
 		&i.ConsumedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Defects,
 	)
 	return i, err
 }
 
 const getStockItem = `-- name: GetStockItem :one
 SELECT
-    si.id, si.plant_id, si.format_id, si.code, si.label, si.length_um, si.width_um, si.height_um, si.is_remnant, si.status, si.location, si.cost_per_unit, si.notes, si.parent_plan_id, si.parent_sheet_index, si.consumed_by_plan_id, si.consumed_at, si.created_at, si.updated_at,
+    si.id, si.plant_id, si.format_id, si.code, si.label, si.length_um, si.width_um, si.height_um, si.is_remnant, si.status, si.location, si.cost_per_unit, si.notes, si.parent_plan_id, si.parent_sheet_index, si.consumed_by_plan_id, si.consumed_at, si.created_at, si.updated_at, si.defects,
     sf.code           AS format_code,
     ms.code           AS spec_code,
     m.code            AS material_code,
@@ -136,6 +139,7 @@ type GetStockItemRow struct {
 	ConsumedAt       pgtype.Timestamptz `json:"consumed_at"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	Defects          []byte             `json:"defects"`
 	FormatCode       *string            `json:"format_code"`
 	SpecCode         *string            `json:"spec_code"`
 	MaterialCode     *string            `json:"material_code"`
@@ -165,6 +169,7 @@ func (q *Queries) GetStockItem(ctx context.Context, id uuid.UUID) (GetStockItemR
 		&i.ConsumedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Defects,
 		&i.FormatCode,
 		&i.SpecCode,
 		&i.MaterialCode,
@@ -174,7 +179,7 @@ func (q *Queries) GetStockItem(ctx context.Context, id uuid.UUID) (GetStockItemR
 }
 
 const listAvailableRemnants = `-- name: ListAvailableRemnants :many
-SELECT si.id, si.plant_id, si.format_id, si.code, si.label, si.length_um, si.width_um, si.height_um, si.is_remnant, si.status, si.location, si.cost_per_unit, si.notes, si.parent_plan_id, si.parent_sheet_index, si.consumed_by_plan_id, si.consumed_at, si.created_at, si.updated_at
+SELECT si.id, si.plant_id, si.format_id, si.code, si.label, si.length_um, si.width_um, si.height_um, si.is_remnant, si.status, si.location, si.cost_per_unit, si.notes, si.parent_plan_id, si.parent_sheet_index, si.consumed_by_plan_id, si.consumed_at, si.created_at, si.updated_at, si.defects
 FROM stock_items si
 LEFT JOIN stock_formats sf ON sf.id = si.format_id
 WHERE si.plant_id = $1
@@ -221,6 +226,7 @@ func (q *Queries) ListAvailableRemnants(ctx context.Context, arg ListAvailableRe
 			&i.ConsumedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Defects,
 		); err != nil {
 			return nil, err
 		}
@@ -235,7 +241,7 @@ func (q *Queries) ListAvailableRemnants(ctx context.Context, arg ListAvailableRe
 const listStockItems = `-- name: ListStockItems :many
 
 SELECT
-    si.id, si.plant_id, si.format_id, si.code, si.label, si.length_um, si.width_um, si.height_um, si.is_remnant, si.status, si.location, si.cost_per_unit, si.notes, si.parent_plan_id, si.parent_sheet_index, si.consumed_by_plan_id, si.consumed_at, si.created_at, si.updated_at,
+    si.id, si.plant_id, si.format_id, si.code, si.label, si.length_um, si.width_um, si.height_um, si.is_remnant, si.status, si.location, si.cost_per_unit, si.notes, si.parent_plan_id, si.parent_sheet_index, si.consumed_by_plan_id, si.consumed_at, si.created_at, si.updated_at, si.defects,
     sf.code           AS format_code,
     ms.code           AS spec_code,
     m.code            AS material_code,
@@ -276,6 +282,7 @@ type ListStockItemsRow struct {
 	ConsumedAt       pgtype.Timestamptz `json:"consumed_at"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	Defects          []byte             `json:"defects"`
 	FormatCode       *string            `json:"format_code"`
 	SpecCode         *string            `json:"spec_code"`
 	MaterialCode     *string            `json:"material_code"`
@@ -313,6 +320,7 @@ func (q *Queries) ListStockItems(ctx context.Context, arg ListStockItemsParams) 
 			&i.ConsumedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Defects,
 			&i.FormatCode,
 			&i.SpecCode,
 			&i.MaterialCode,
@@ -334,9 +342,10 @@ SET label     = COALESCE($2::text, label),
     location  = COALESCE($3::text, location),
     status    = COALESCE($4::text, status),
     notes     = COALESCE($5::text, notes),
+    defects   = COALESCE($6::jsonb, defects),
     updated_at = now()
 WHERE id = $1
-RETURNING id, plant_id, format_id, code, label, length_um, width_um, height_um, is_remnant, status, location, cost_per_unit, notes, parent_plan_id, parent_sheet_index, consumed_by_plan_id, consumed_at, created_at, updated_at
+RETURNING id, plant_id, format_id, code, label, length_um, width_um, height_um, is_remnant, status, location, cost_per_unit, notes, parent_plan_id, parent_sheet_index, consumed_by_plan_id, consumed_at, created_at, updated_at, defects
 `
 
 type UpdateStockItemParams struct {
@@ -345,6 +354,7 @@ type UpdateStockItemParams struct {
 	Location *string   `json:"location"`
 	Status   *string   `json:"status"`
 	Notes    *string   `json:"notes"`
+	Defects  []byte    `json:"defects"`
 }
 
 func (q *Queries) UpdateStockItem(ctx context.Context, arg UpdateStockItemParams) (StockItem, error) {
@@ -354,6 +364,7 @@ func (q *Queries) UpdateStockItem(ctx context.Context, arg UpdateStockItemParams
 		arg.Location,
 		arg.Status,
 		arg.Notes,
+		arg.Defects,
 	)
 	var i StockItem
 	err := row.Scan(
@@ -376,6 +387,7 @@ func (q *Queries) UpdateStockItem(ctx context.Context, arg UpdateStockItemParams
 		&i.ConsumedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Defects,
 	)
 	return i, err
 }

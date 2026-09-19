@@ -34,9 +34,9 @@ WHERE si.id = $1;
 INSERT INTO stock_items (
     plant_id, format_id, code, label, length_um, width_um, height_um,
     is_remnant, status, location, cost_per_unit, notes,
-    parent_plan_id, parent_sheet_index
+    parent_plan_id, parent_sheet_index, defects
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 RETURNING *;
 
 -- name: UpdateStockItem :one
@@ -45,6 +45,7 @@ SET label     = COALESCE(sqlc.narg('label')::text, label),
     location  = COALESCE(sqlc.narg('location')::text, location),
     status    = COALESCE(sqlc.narg('status')::text, status),
     notes     = COALESCE(sqlc.narg('notes')::text, notes),
+    defects   = COALESCE(sqlc.narg('defects')::jsonb, defects),
     updated_at = now()
 WHERE id = $1
 RETURNING *;

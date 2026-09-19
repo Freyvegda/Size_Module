@@ -48,6 +48,14 @@ func Validate(p core.Problem, s core.Solution) []Violation {
 	for _, part := range p.Parts {
 		partByID[part.ID] = part
 	}
+	// Defect regions are piece-local; a sheet cut from a physical piece must not
+	// place a part over one. Sheets without a stock id (catalog stock) have none.
+	defectsByStock := map[string][]core.Rect{}
+	for _, stock := range p.Stocks {
+		if stock.ID != "" && len(stock.Defects) > 0 {
+			defectsByStock[stock.ID] = stock.Defects
+		}
+	}
 
 	var violations []Violation
 	placed := map[string]int{}
@@ -59,6 +67,7 @@ func Validate(p core.Problem, s core.Solution) []Violation {
 			continue
 		}
 		sheetRegion := core.Rect{X: 0, Y: 0, W: sheet.Width, H: sheet.Height}
+		sheetDefects := defectsByStock[sheet.StockID]
 
 		for i, pl := range sheet.Placements {
 			part, known := partByID[pl.PartID]
@@ -72,6 +81,14 @@ func Validate(p core.Problem, s core.Solution) []Violation {
 			if !sheetRegion.Contains(r) {
 				violations = append(violations, errorf("out_of_bounds", sheet.Index, pl.PartCode,
 					"piece %s on sheet %d extends beyond the sheet", pl.PartCode, sheet.Index+1))
+			}
+			for _, d := range sheetDefects {
+				if geom.Intersects(r, d) {
+					violations = append(violations, errorf("defect_overlap", sheet.Index, pl.PartCode,
+						"piece %s on sheet %d overlaps an unusable region of the stock",
+						pl.PartCode, sheet.Index+1))
+					break
+				}
 			}
 			if known {
 				if err := checkOrientation(p, part, pl); err != nil {
