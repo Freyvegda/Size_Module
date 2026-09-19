@@ -34,7 +34,7 @@ import {
   updateStockPiece,
 } from '@/features/catalog/catalogSlice'
 import { micronToMm, mmToMicron } from '@/lib/format'
-import type { Material, MaterialSpec, StockItemStatus, StockPiece } from '@/lib/types'
+import type { Material, MaterialSpec, Rect, StockItemStatus, StockPiece } from '@/lib/types'
 
 const statusVariants: Record<StockItemStatus, 'default' | 'secondary' | 'outline' | 'destructive'> = {
   available: 'default',
@@ -62,6 +62,7 @@ export function StockPage() {
     updateStockPieceError,
   } = useAppSelector((state) => state.catalog)
   const [statusFilter, setStatusFilter] = useState<StockItemStatus | 'all'>('available')
+  const [defectTarget, setDefectTarget] = useState<StockPiece>()
 
   useEffect(() => {
     void dispatch(fetchStockFormats())
@@ -216,6 +217,7 @@ export function StockPage() {
                         <TableHead>Location</TableHead>
                         <TableHead>Source</TableHead>
                         <TableHead className="text-right">Cost basis</TableHead>
+                        <TableHead>Defects</TableHead>
                         <TableHead />
                       </TableRow>
                     </TableHeader>
@@ -239,7 +241,23 @@ export function StockPage() {
                           <TableCell className="text-right">
                             {piece.costPerUnit > 0 ? piece.costPerUnit.toFixed(2) : '—'}
                           </TableCell>
+                          <TableCell>
+                            {(piece.defects?.length ?? 0) > 0 ? (
+                              <Badge variant="destructive">{piece.defects?.length}</Badge>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
+                          </TableCell>
                           <TableCell className="text-right">
+                            {piece.widthMicron && piece.heightMicron ? (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setDefectTarget(piece)}
+                              >
+                                Defects
+                              </Button>
+                            ) : null}
                             {(piece.status === 'available' || piece.status === 'reserved') && (
                               <Button
                                 variant="ghost"
@@ -260,7 +278,7 @@ export function StockPage() {
                       ))}
                       {pieces.length === 0 && !loading && (
                         <TableRow>
-                          <TableCell colSpan={7} className="text-center text-sm text-muted-foreground">
+                          <TableCell colSpan={8} className="text-center text-sm text-muted-foreground">
                             No pieces with this status. Accept a plan to create labelled remnants, or
                             register one on the right.
                           </TableCell>
@@ -275,11 +293,15 @@ export function StockPage() {
               </CardContent>
             </Card>
 
-            <RegisterPieceCard
-              formats={formats}
-              status={createStockPieceStatus}
-              error={createStockPieceError}
-            />
+            {defectTarget ? (
+              <DefectEditorCard piece={defectTarget} onClose={() => setDefectTarget(undefined)} />
+            ) : (
+              <RegisterPieceCard
+                formats={formats}
+                status={createStockPieceStatus}
+                error={createStockPieceError}
+              />
+            )}
           </div>
         </TabsContent>
       </Tabs>
@@ -647,6 +669,89 @@ function AddStockFormatCard({ materials, specs, status, error }: AddStockFormatC
         <Button className="w-full" disabled={!valid || status === 'loading'} onClick={submit}>
           {status === 'loading' ? 'Adding…' : 'Add stock format'}
         </Button>
+      </CardContent>
+    </Card>
+  )
+}
+
+interface DefectEditorCardProps {
+  piece: StockPiece
+  onClose: () => void
+}
+
+/**
+ * Defects are unusable regions of a physical piece, in piece-local millimetres.
+ * They are typed as "x, y, width, height" groups separated by semicolons and
+ * stored (and validated) in micrometers by the API.
+ */
+function DefectEditorCard({ piece, onClose }: DefectEditorCardProps) {
+  const dispatch = useAppDispatch()
+  const updateStatus = useAppSelector((state) => state.catalog.updateStockPieceStatus)
+  const error = useAppSelector((state) => state.catalog.updateStockPieceError)
+  const [text, setText] = useState(() =>
+    (piece.defects ?? [])
+      .map((d) => [d.x, d.y, d.w, d.h].map((value) => micronToMm(value)).join(', '))
+      .join('; '),
+  )
+  const [parseError, setParseError] = useState<string>()
+
+  const parse = (): Rect[] | undefined => {
+    const value = text.trim()
+    if (!value) return []
+    const rects: Rect[] = []
+    for (const chunk of value.split(';').map((item) => item.trim()).filter(Boolean)) {
+      const nums = chunk.split(',').map((item) => Number(item.trim()))
+      if (nums.length !== 4 || nums.some((n) => !Number.isFinite(n))) {
+        setParseError('Each defect needs four numbers: x, y, width, height (mm).')
+        return undefined
+      }
+      const [x, y, w, h] = nums
+      rects.push({ x: mmToMicron(x), y: mmToMicron(y), w: mmToMicron(w), h: mmToMicron(h) })
+    }
+    return rects
+  }
+
+  const save = () => {
+    setParseError(undefined)
+    const defects = parse()
+    if (!defects) return
+    void dispatch(updateStockPiece({ id: piece.id, input: { defects } })).then((action) => {
+      if (updateStockPiece.fulfilled.match(action)) onClose()
+    })
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Defects on {piece.label}</CardTitle>
+        <CardDescription>
+          Unusable regions in piece-local millimetres: x, y, width, height. Separate several with a
+          semicolon. Leave the field empty to clear them.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="defect-map">Defects (mm)</Label>
+          <Input
+            id="defect-map"
+            placeholder="100, 50, 300, 300; 1200, 400, 200, 200"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          The solvers already avoid these regions; the validator rejects any plan that covers one.
+        </p>
+        {parseError && <p className="text-sm text-destructive">{parseError}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
+        <div className="flex gap-2">
+          <Button onClick={save} disabled={updateStatus === 'loading'}>
+            {updateStatus === 'loading' ? 'Saving...' : 'Save defects'}
+          </Button>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
       </CardContent>
     </Card>
   )

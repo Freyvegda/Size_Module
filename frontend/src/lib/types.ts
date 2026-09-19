@@ -503,6 +503,8 @@ export interface StockPiece {
   consumedByPlanId?: string
   consumedAt?: string
   createdAt: string
+  /** Unusable regions of the piece (knots, cracks); solvers avoid them. */
+  defects?: Rect[]
 }
 
 export interface CreateStockPieceInput {
@@ -516,6 +518,7 @@ export interface CreateStockPieceInput {
   location?: string
   costPerUnit?: number
   notes?: string
+  defects?: Rect[]
 }
 
 export interface UpdateStockPieceInput {
@@ -523,6 +526,8 @@ export interface UpdateStockPieceInput {
   location?: string
   status?: Exclude<StockItemStatus, 'consumed'>
   notes?: string
+  /** Replaces the defect map when present; use an empty array to clear it. */
+  defects?: Rect[]
 }
 
 export interface FetchStockItemsArgs {
