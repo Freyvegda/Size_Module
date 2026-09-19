@@ -18,6 +18,7 @@ tags:
   - name: catalog
   - name: stock
   - name: plans
+  - name: campaigns
 
 paths:
   /healthz:
@@ -290,6 +291,47 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiError" }
 
+  /api/v1/material-specs:
+    get:
+      tags: [catalog]
+      summary: List material specs (types) with their family
+      responses:
+        "200":
+          description: Material specs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [materialSpecs]
+                properties:
+                  materialSpecs:
+                    type: array
+                    items: { $ref: "#/components/schemas/MaterialSpec" }
+        "503":
+          description: Database not configured or unreachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    post:
+      tags: [catalog]
+      summary: Create a material spec (a type of a family, e.g. Oak 18 mm)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateMaterialSpecInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaterialSpec" }
+        "409":
+          description: Duplicate code or invalid input
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
   /api/v1/stock-formats:
     get:
       tags: [catalog]
@@ -308,6 +350,25 @@ paths:
                     items: { $ref: "#/components/schemas/StockFormat" }
         "503":
           description: Database not configured or unreachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    post:
+      tags: [catalog]
+      summary: Add a catalog stock size for a material spec
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateStockFormatInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StockFormat" }
+        "409":
+          description: Duplicate code or invalid input
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiError" }
@@ -349,6 +410,68 @@ paths:
               schema: { $ref: "#/components/schemas/CatalogPart" }
         "409":
           description: Duplicate code or invalid input
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/assemblies:
+    get:
+      tags: [catalog]
+      summary: List assemblies (products with subparts)
+      responses:
+        "200":
+          description: Assemblies
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [assemblies]
+                properties:
+                  assemblies:
+                    type: array
+                    items: { $ref: "#/components/schemas/Assembly" }
+        "503":
+          description: Database not configured or unreachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    post:
+      tags: [catalog]
+      summary: Create an assembly and its components in one transaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateAssemblyInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Assembly" }
+        "409":
+          description: Duplicate code or invalid input
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/assemblies/{id}:
+    get:
+      tags: [catalog]
+      summary: Fetch one assembly with its components
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Assembly
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Assembly" }
+        "404":
+          description: Unknown assembly id
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiError" }
@@ -533,6 +656,344 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiError" }
 
+  /api/v1/plans/{id}/edit:
+    post:
+      tags: [plans]
+      summary: Save hand edits as the next plan version
+      description: |
+        Applies move/rotate/lock/delete operations to the stored layout and
+        stores the result as version `n+1` (the source is archived). The server
+        validates the edited layout (bounds, trim, kerf, guillotine feasibility,
+        demand); a layout that cannot be produced is rejected with `422` and the
+        violation list. Only draft or approved plans can be edited.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EditPlanRequest" }
+      responses:
+        "200":
+          description: The new plan version
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanDetail" }
+        "404":
+          description: Unknown plan id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "409":
+          description: The plan is accepted or archived, or has no problem snapshot
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "422":
+          description: Unknown placement id, or the edited layout is not manufacturable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/plans/{id}/reoptimize:
+    post:
+      tags: [plans]
+      summary: Re-solve a plan, keeping locked placements in place
+      description: |
+        Locked placements become pinned sheets: the solver fills the remaining
+        stock around them with the rest of the demand. Optional operations are
+        applied before solving, so a drag plus re-solve is one round trip. The
+        result is stored as the next plan version and the source is archived.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReoptimizePlanRequest" }
+      responses:
+        "200":
+          description: The new plan version
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanDetail" }
+        "404":
+          description: Unknown plan id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "409":
+          description: The plan is accepted or archived, or has no problem snapshot
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "422":
+          description: Invalid operation or the solver could not run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/plans/{id}/exports:
+    get:
+      tags: [plans]
+      summary: Download a plan as CSV, SVG, DXF or PDF
+      description: |
+        `csv` is the shop-floor cut list (pieces, ordered cut steps, offcuts),
+        `svg` a review drawing, `dxf` an R12 CAD/CAM drawing and `pdf` a
+        printable one-page-per-sheet drawing. `sheet` selects one sheet.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: format
+          required: true
+          schema: { type: string, enum: [csv, svg, dxf, pdf] }
+        - in: query
+          name: sheet
+          schema: { type: string, description: Zero-based sheet index, or "all" (default) }
+      responses:
+        "200":
+          description: The exported file
+          content:
+            text/csv: {}
+            image/svg+xml: {}
+            application/dxf: {}
+            application/pdf: {}
+        "400":
+          description: Unknown format
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: Unknown plan id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/kpis:
+    get:
+      tags: [plans]
+      summary: Realized-yield and costing KPIs across plans
+      description: |
+        Aggregates the stored plan scorecards. `realized` covers accepted plans
+        (what the shop committed to), `created` every plan in the window, and
+        `series` lists accepted plans over time for a trend line. The window
+        defaults to the last 90 days.
+      parameters:
+        - in: query
+          name: days
+          schema: { type: integer, default: 90, minimum: 1, maximum: 3650 }
+        - in: query
+          name: from
+          schema: { type: string, description: RFC3339 or YYYY-MM-DD }
+        - in: query
+          name: to
+          schema: { type: string, description: RFC3339 or YYYY-MM-DD }
+      responses:
+        "200":
+          description: KPI report
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KpiReport" }
+        "400":
+          description: Invalid window
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "503":
+          description: Database not configured or unreachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/campaigns:
+    get:
+      tags: [campaigns]
+      summary: List campaigns
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, minimum: 1, maximum: 500 }
+        - in: query
+          name: offset
+          schema: { type: integer, default: 0, minimum: 0 }
+      responses:
+        "200":
+          description: Campaigns, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [campaigns]
+                properties:
+                  campaigns:
+                    type: array
+                    items: { $ref: "#/components/schemas/CampaignSummary" }
+        "503":
+          description: Database not configured or unreachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    post:
+      tags: [campaigns]
+      summary: Create a campaign with a shared stock budget
+      description: |
+        The stock list is the planning budget: items are solved against it in
+        order, the budget shrinks as sheets are used and grows as offcuts
+        re-enter as labelled (CMP-…) remnants. `useRemnants` appends the plant's
+        available labelled remnants at creation time.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCampaignRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CampaignDetail" }
+        "400":
+          description: Missing name
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/campaigns/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [campaigns]
+      summary: One campaign with items, progress and remaining budget
+      responses:
+        "200":
+          description: Campaign detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CampaignDetail" }
+        "404":
+          description: Unknown campaign
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    patch:
+      tags: [campaigns]
+      summary: Rename a campaign or move its status
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateCampaignRequest" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CampaignDetail" }
+        "404":
+          description: Unknown campaign
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/campaigns/{id}/items:
+    post:
+      tags: [campaigns]
+      summary: Append an item (a job) to the campaign
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCampaignItemRequest" }
+      responses:
+        "201":
+          description: Updated campaign detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CampaignDetail" }
+        "409":
+          description: Campaign is completed or cancelled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/campaigns/{id}/items/{itemID}:
+    delete:
+      tags: [campaigns]
+      summary: Remove a pending item
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: itemID
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Updated campaign detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CampaignDetail" }
+        "404":
+          description: Unknown item, or it has already been planned
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/campaigns/{id}/run-next:
+    post:
+      tags: [campaigns]
+      summary: Solve the next pending item against the remaining budget
+      description: |
+        Runs the earliest pending item, archives it as a job plus draft plan and
+        stores the reduced budget (used sheets leave; offcuts re-enter as CMP-…
+        remnants) in one transaction. The campaign becomes `active` on the first
+        run and `completed` when nothing is pending.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RunNextRequest" }
+      responses:
+        "200":
+          description: Updated campaign detail with the new plan in its item
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CampaignDetail" }
+        "409":
+          description: Nothing pending, or the campaign is closed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "422":
+          description: The solver could not run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
 components:
   schemas:
     ApiError:
@@ -563,6 +1024,7 @@ components:
         Rotation: { type: boolean }
         Grain: { type: boolean }
         Remnants: { type: boolean }
+        Pinned: { type: boolean, description: Honours planner-locked placements }
         MaxParts: { type: integer }
         Rank:
           type: integer
@@ -690,6 +1152,10 @@ components:
       type: object
       required: [partId, partCode, x, y, w, h, rotated]
       properties:
+        id:
+          type: string
+          format: uuid
+          description: Placement id, required for edits; empty for fresh solves
         partId: { type: string }
         partCode: { type: string }
         x: { type: integer }
@@ -698,6 +1164,9 @@ components:
         h: { type: integer }
         rotated: { type: boolean }
         priority: { type: integer }
+        locked:
+          type: boolean
+          description: Locked placements are pinned for the next re-solve
 
     SheetPlan:
       type: object
@@ -749,6 +1218,74 @@ components:
         usedLengthM: { type: number }
         elapsedMs: { type: integer }
 
+    CostReport:
+      type: object
+      description: |
+        Cost breakdown of a plan. Values are in the same unitless currency as
+        `stock_formats.cost_per_unit`. A sheet from a catalog format costs its
+        CostPerUnit; a sheet from a remnant costs the remnant's prorated value;
+        part/trim/kerf/scrap/offcut areas each carry their share of the sheet
+        cost. NetCost = material taken − offcut credit (leftovers that stay in
+        stock).
+      properties:
+        newMaterialCost: { type: number }
+        remnantCost: { type: number }
+        totalStockCost: { type: number }
+        offcutCredit: { type: number }
+        netCost: { type: number }
+        partCost: { type: number }
+        trimCost: { type: number }
+        kerfCost: { type: number }
+        scrapCost: { type: number }
+        costPerPart: { type: number }
+        costPerM2: { type: number }
+
+    KpiBucket:
+      type: object
+      description: Plan aggregates over a window (accepted plans, or all created plans).
+      properties:
+        plans: { type: integer }
+        sheets: { type: integer }
+        partsPlaced: { type: integer }
+        remnantSheets: { type: integer }
+        stockAreaM2: { type: number }
+        partAreaM2: { type: number }
+        scrapAreaM2: { type: number }
+        offcutAreaM2: { type: number }
+        yieldPct: { type: number }
+        wastePct: { type: number }
+        cost: { type: number }
+        costPerPart: { type: number }
+
+    KpiSeriesPoint:
+      type: object
+      properties:
+        planId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        yieldPct: { type: number }
+        wastePct: { type: number }
+        cost: { type: number }
+        sheets: { type: integer }
+        partsPlaced: { type: integer }
+
+    KpiReport:
+      type: object
+      required: [from, to, realized, created, series]
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        realized:
+          allOf:
+            - $ref: "#/components/schemas/KpiBucket"
+          description: Accepted plans — what the shop committed to
+        created:
+          allOf:
+            - $ref: "#/components/schemas/KpiBucket"
+          description: Every plan created in the window
+        series:
+          type: array
+          items: { $ref: "#/components/schemas/KpiSeriesPoint" }
+
     Solution:
       type: object
       properties:
@@ -783,6 +1320,7 @@ components:
           type: array
           items: { $ref: "#/components/schemas/Violation" }
         score: { type: number }
+        cost: { $ref: "#/components/schemas/CostReport" }
 
     OptimizeResponse:
       type: object
@@ -871,6 +1409,44 @@ components:
         onHandQty: { type: integer }
         costPerUnit: { type: number }
 
+    MaterialSpec:
+      type: object
+      description: A concrete variant of a material family, e.g. Oak 18 mm under Wood.
+      properties:
+        id: { type: string, format: uuid }
+        materialId: { type: string, format: uuid }
+        materialCode: { type: string }
+        materialName: { type: string }
+        dimensionProfile: { type: string, enum: [1d, 2d, 3d] }
+        code: { type: string }
+        name: { type: string }
+        thicknessMicron: { type: integer }
+        finish: { type: string }
+        color: { type: string }
+
+    CreateMaterialSpecInput:
+      type: object
+      required: [materialId, code]
+      properties:
+        materialId: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        thicknessMicron: { type: integer }
+        finish: { type: string }
+        color: { type: string }
+
+    CreateStockFormatInput:
+      type: object
+      required: [materialSpecId, code]
+      properties:
+        materialSpecId: { type: string, format: uuid }
+        code: { type: string }
+        lengthMicron: { type: integer }
+        widthMicron: { type: integer }
+        heightMicron: { type: integer }
+        onHandQty: { type: integer }
+        costPerUnit: { type: number }
+
     CatalogPart:
       type: object
       properties:
@@ -898,6 +1474,71 @@ components:
         grain: { type: string, enum: [none, along_x, along_y] }
         allowRotate: { type: boolean }
         priority: { type: integer }
+
+    AssemblyComponent:
+      type: object
+      description: One subpart of a product, a box in the assembly's local frame.
+      properties:
+        id: { type: string, format: uuid }
+        seq: { type: integer }
+        role: { type: string, description: "Semantic role, e.g. glass, frame-left" }
+        kind: { type: string, enum: [beam, panel, custom] }
+        name: { type: string }
+        materialSpecId: { type: string, format: uuid }
+        quantity: { type: integer }
+        widthMicron: { type: integer }
+        heightMicron: { type: integer }
+        depthMicron: { type: integer }
+        offsetXMicron: { type: integer }
+        offsetYMicron: { type: integer }
+        offsetZMicron: { type: integer }
+
+    Assembly:
+      type: object
+      description: A product built from subparts (e.g. a window with glass and beams).
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [window, door, generic] }
+        materialSpecId: { type: string, format: uuid }
+        widthMicron: { type: integer }
+        heightMicron: { type: integer }
+        depthMicron: { type: integer }
+        components:
+          type: array
+          items: { $ref: "#/components/schemas/AssemblyComponent" }
+
+    CreateAssemblyComponentInput:
+      type: object
+      properties:
+        seq: { type: integer }
+        role: { type: string }
+        kind: { type: string, enum: [beam, panel, custom] }
+        name: { type: string }
+        materialSpecId: { type: string, format: uuid }
+        quantity: { type: integer }
+        widthMicron: { type: integer }
+        heightMicron: { type: integer }
+        depthMicron: { type: integer }
+        offsetXMicron: { type: integer }
+        offsetYMicron: { type: integer }
+        offsetZMicron: { type: integer }
+
+    CreateAssemblyInput:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [window, door, generic] }
+        materialSpecId: { type: string, format: uuid }
+        widthMicron: { type: integer }
+        heightMicron: { type: integer }
+        depthMicron: { type: integer }
+        components:
+          type: array
+          items: { $ref: "#/components/schemas/CreateAssemblyComponentInput" }
 
     StockPiece:
       type: object
@@ -966,6 +1607,10 @@ components:
       properties:
         id: { type: string, format: uuid }
         jobId: { type: string, format: uuid }
+        parentPlanId:
+          type: string
+          format: uuid
+          description: The plan version this one was edited or re-solved from
         status: { type: string, enum: [draft, approved, accepted, archived] }
         version: { type: integer }
         name: { type: string }
@@ -982,9 +1627,43 @@ components:
         - type: object
           required: [result]
           properties:
+            rules:
+              $ref: "#/components/schemas/Rules"
+              description: The constraints the plan was created with
             result:
               $ref: "#/components/schemas/OptimizeResult"
-              description: The archived result, or a reconstruction when no result JSON was stored
+              description: The rebuilt layout, with placement ids and locks
+
+    EditOperation:
+      type: object
+      required: [placementId]
+      properties:
+        placementId: { type: string, format: uuid }
+        x: { type: integer, description: New top-left x in µm }
+        y: { type: integer, description: New top-left y in µm }
+        rotated: { type: boolean }
+        locked: { type: boolean }
+        delete: { type: boolean }
+
+    EditPlanRequest:
+      type: object
+      required: [operations]
+      properties:
+        operations:
+          type: array
+          items: { $ref: "#/components/schemas/EditOperation" }
+        name: { type: string }
+
+    ReoptimizePlanRequest:
+      type: object
+      properties:
+        operations:
+          type: array
+          items: { $ref: "#/components/schemas/EditOperation" }
+          description: Applied before solving, so a drag plus re-solve is one call
+        solver: { type: string, description: Omit to let the registry pick a pinned-capable solver }
+        budgetMs: { type: integer }
+        name: { type: string }
 
     AcceptPlanResponse:
       type: object
@@ -1000,9 +1679,108 @@ components:
           type: array
           items: { type: string }
           description: Labels of physical pieces that were used up
+        stockShortages:
+          type: integer
+          description: Physical pieces that were already consumed by another plan
         formatDecrements:
           type: integer
           description: Sheets taken from catalog on-hand quantities
         formatShortages:
           type: integer
           description: Sheets whose format had no on-hand stock left to decrement
+
+    CampaignSummary:
+      type: object
+      required: [id, name, status]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        status: { type: string, enum: [draft, active, completed, cancelled] }
+        budgetMs: { type: integer }
+        seed: { type: integer, format: int64 }
+        rules: { $ref: "#/components/schemas/Rules" }
+        objective: { $ref: "#/components/schemas/Objective" }
+        stock:
+          type: array
+          description: Remaining shared stock budget
+          items: { $ref: "#/components/schemas/StockItem" }
+        initialStock:
+          type: array
+          description: The budget the campaign started from
+          items: { $ref: "#/components/schemas/StockItem" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+
+    CampaignItem:
+      type: object
+      required: [id, seq, status]
+      properties:
+        id: { type: string, format: uuid }
+        seq: { type: integer }
+        name: { type: string }
+        parts:
+          type: array
+          items: { $ref: "#/components/schemas/Part" }
+        dueDate: { type: string, format: date }
+        priority: { type: integer }
+        status: { type: string, enum: [pending, planned, failed] }
+        planId: { type: string, format: uuid }
+        jobId: { type: string, format: uuid }
+        error: { type: string }
+
+    CampaignDetail:
+      allOf:
+        - $ref: "#/components/schemas/CampaignSummary"
+        - type: object
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/CampaignItem" }
+            progress:
+              type: object
+              properties:
+                items: { type: integer }
+                pending: { type: integer }
+                planned: { type: integer }
+
+    CreateCampaignRequest:
+      type: object
+      required: [name]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        budgetMs: { type: integer, default: 5000 }
+        seed: { type: integer, format: int64 }
+        rules: { $ref: "#/components/schemas/Rules" }
+        objective: { $ref: "#/components/schemas/Objective" }
+        stock:
+          type: array
+          items: { $ref: "#/components/schemas/StockItem" }
+        useRemnants:
+          type: boolean
+          description: Append the plant's available labelled remnants to the budget
+
+    UpdateCampaignRequest:
+      type: object
+      properties:
+        name: { type: string }
+        status: { type: string, enum: [draft, active, completed, cancelled] }
+
+    CreateCampaignItemRequest:
+      type: object
+      required: [name, parts]
+      properties:
+        name: { type: string }
+        parts:
+          type: array
+          items: { $ref: "#/components/schemas/Part" }
+        dueDate: { type: string, format: date }
+        priority: { type: integer, default: 100 }
+
+    RunNextRequest:
+      type: object
+      properties:
+        solver: { type: string }
+        budgetMs: { type: integer }

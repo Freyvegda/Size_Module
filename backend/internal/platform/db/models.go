@@ -9,6 +9,39 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Assembly struct {
+	ID             uuid.UUID          `json:"id"`
+	PlantID        uuid.UUID          `json:"plant_id"`
+	Code           string             `json:"code"`
+	Name           string             `json:"name"`
+	Kind           string             `json:"kind"`
+	WidthUm        int64              `json:"width_um"`
+	HeightUm       int64              `json:"height_um"`
+	DepthUm        int64              `json:"depth_um"`
+	Attributes     []byte             `json:"attributes"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	MaterialSpecID pgtype.UUID        `json:"material_spec_id"`
+}
+
+type AssemblyComponent struct {
+	ID             uuid.UUID   `json:"id"`
+	AssemblyID     uuid.UUID   `json:"assembly_id"`
+	Seq            int32       `json:"seq"`
+	Role           string      `json:"role"`
+	Kind           string      `json:"kind"`
+	Name           string      `json:"name"`
+	MaterialSpecID pgtype.UUID `json:"material_spec_id"`
+	WidthUm        int64       `json:"width_um"`
+	HeightUm       int64       `json:"height_um"`
+	DepthUm        int64       `json:"depth_um"`
+	OffsetXUm      int64       `json:"offset_x_um"`
+	OffsetYUm      int64       `json:"offset_y_um"`
+	OffsetZUm      int64       `json:"offset_z_um"`
+	Attributes     []byte      `json:"attributes"`
+	Quantity       int32       `json:"quantity"`
+}
+
 type AuditLog struct {
 	ID        int64              `json:"id"`
 	PlantID   pgtype.UUID        `json:"plant_id"`
@@ -18,6 +51,39 @@ type AuditLog struct {
 	EntityID  string             `json:"entity_id"`
 	Payload   []byte             `json:"payload"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type Campaign struct {
+	ID           uuid.UUID          `json:"id"`
+	PlantID      uuid.UUID          `json:"plant_id"`
+	Code         string             `json:"code"`
+	Name         string             `json:"name"`
+	Status       string             `json:"status"`
+	Rules        []byte             `json:"rules"`
+	Objective    []byte             `json:"objective"`
+	BudgetMs     int32              `json:"budget_ms"`
+	Seed         int64              `json:"seed"`
+	Stock        []byte             `json:"stock"`
+	InitialStock []byte             `json:"initial_stock"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
+}
+
+type CampaignItem struct {
+	ID         uuid.UUID          `json:"id"`
+	CampaignID uuid.UUID          `json:"campaign_id"`
+	Seq        int32              `json:"seq"`
+	Name       string             `json:"name"`
+	Parts      []byte             `json:"parts"`
+	DueDate    pgtype.Date        `json:"due_date"`
+	Priority   int32              `json:"priority"`
+	Status     string             `json:"status"`
+	PlanID     pgtype.UUID        `json:"plan_id"`
+	JobID      pgtype.UUID        `json:"job_id"`
+	Error      string             `json:"error"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
 type CutJob struct {
@@ -112,6 +178,7 @@ type Placement struct {
 	HUm         int64       `json:"h_um"`
 	Rotated     bool        `json:"rotated"`
 	Seq         int32       `json:"seq"`
+	Locked      bool        `json:"locked"`
 }
 
 type Plan struct {
@@ -130,6 +197,7 @@ type Plan struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 	AcceptedAt    pgtype.Timestamptz `json:"accepted_at"`
+	ParentPlanID  pgtype.UUID        `json:"parent_plan_id"`
 }
 
 type PlanSheet struct {

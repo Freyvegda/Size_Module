@@ -42,16 +42,28 @@ func physicalStockItem(ctx context.Context, q *db.Queries, stockID string) (pgty
 	return pgtype.UUID{Bytes: parsed, Valid: true}, nil
 }
 
+// planParams are the row-level fields of a plan version.
+type planParams struct {
+	PlantID      uuid.UUID
+	JobID        pgtype.UUID
+	ParentPlanID pgtype.UUID
+	Version      int32
+	Status       string
+	Name         string
+}
+
 // writePlan stores one finished optimization result as a plan with its sheets
-// and placements. It is shared by the synchronous archive path (SaveRun) and
-// the asynchronous worker (Complete), so both produce identical rows.
-func writePlan(ctx context.Context, q *db.Queries, plantID, jobID uuid.UUID, problem core.Problem, result optimizer.Result) (uuid.UUID, error) {
+// and placements. It is shared by the synchronous archive path (SaveRun), the
+// asynchronous worker (Complete) and plan versioning (SaveVersion), so all
+// paths produce identical rows.
+func writePlan(ctx context.Context, q *db.Queries, params planParams, problem core.Problem, result optimizer.Result) (uuid.UUID, error) {
 	plan, err := q.CreatePlan(ctx, db.CreatePlanParams{
-		PlantID:       plantID,
-		JobID:         pgtypeUUID(jobID),
-		Version:       1,
-		Status:        "draft",
-		Name:          "Optimization run",
+		PlantID:       params.PlantID,
+		JobID:         params.JobID,
+		ParentPlanID:  params.ParentPlanID,
+		Version:       params.Version,
+		Status:        params.Status,
+		Name:          params.Name,
 		Solver:        result.Solution.Solver,
 		SolverVersion: result.Solution.SolverVersion,
 		Seed:          int64(result.Solution.Seed),
@@ -93,6 +105,7 @@ func writePlan(ctx context.Context, q *db.Queries, plantID, jobID uuid.UUID, pro
 				WUm:         pl.W,
 				HUm:         pl.H,
 				Rotated:     pl.Rotated,
+				Locked:      pl.Locked,
 				Seq:         int32(i),
 			}); err != nil {
 				return uuid.Nil, err

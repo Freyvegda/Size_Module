@@ -9,8 +9,11 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"github.com/size-module/backend/internal/modules/assemblies"
+	"github.com/size-module/backend/internal/modules/campaigns"
 	"github.com/size-module/backend/internal/modules/catalog"
 	"github.com/size-module/backend/internal/modules/jobs"
+	"github.com/size-module/backend/internal/modules/kpis"
 	"github.com/size-module/backend/internal/modules/parts"
 	"github.com/size-module/backend/internal/modules/plans"
 	"github.com/size-module/backend/internal/modules/stock"
@@ -22,14 +25,17 @@ import (
 // Deps is everything the router needs. Store backed handlers are optional so
 // the API can start without a database.
 type Deps struct {
-	Config   config.Config
-	Registry *core.Registry
-	Jobs     *jobs.Handler
-	Catalog  *catalog.Handler
-	Parts    *parts.Handler
-	Stock    *stock.Handler
-	Plans    *plans.Handler
-	DBHealth func(ctx context.Context) error
+	Config     config.Config
+	Registry   *core.Registry
+	Jobs       *jobs.Handler
+	Catalog    *catalog.Handler
+	Parts      *parts.Handler
+	Assemblies *assemblies.Handler
+	Stock      *stock.Handler
+	Plans      *plans.Handler
+	Campaigns  *campaigns.Handler
+	Kpis       *kpis.Handler
+	DBHealth   func(ctx context.Context) error
 }
 
 // New builds the HTTP handler.
@@ -62,11 +68,20 @@ func New(deps Deps) http.Handler {
 		if deps.Parts != nil {
 			deps.Parts.Routes(r)
 		}
+		if deps.Assemblies != nil {
+			deps.Assemblies.Routes(r)
+		}
 		if deps.Stock != nil {
 			deps.Stock.Routes(r)
 		}
 		if deps.Plans != nil {
 			deps.Plans.Routes(r)
+		}
+		if deps.Campaigns != nil {
+			deps.Campaigns.Routes(r)
+		}
+		if deps.Kpis != nil {
+			deps.Kpis.Routes(r)
 		}
 	})
 	return r

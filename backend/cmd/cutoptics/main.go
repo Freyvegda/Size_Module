@@ -19,8 +19,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/size-module/backend/internal/modules/assemblies"
+	"github.com/size-module/backend/internal/modules/campaigns"
 	"github.com/size-module/backend/internal/modules/catalog"
 	"github.com/size-module/backend/internal/modules/jobs"
+	"github.com/size-module/backend/internal/modules/kpis"
 	"github.com/size-module/backend/internal/modules/parts"
 	"github.com/size-module/backend/internal/modules/plans"
 	"github.com/size-module/backend/internal/modules/stock"
@@ -86,20 +89,26 @@ func main() {
 	hub := events.NewHub()
 
 	var (
-		jobsStore    jobs.Store
-		catalogStore catalog.Store
-		partsStore   parts.Store
-		stockStore   stock.Store
-		plansStore   plans.Store
-		remnants     jobs.RemnantSource
-		queueStore   jobs.QueueStore
-		worker       *jobs.Worker
-		dbHealth     func(context.Context) error
+		jobsStore     jobs.Store
+		catalogStore  catalog.Store
+		partsStore    parts.Store
+		assemblyStore assemblies.Store
+		stockStore    stock.Store
+		plansStore    plans.Store
+		campaignStore campaigns.Store
+		kpisStore     kpis.Store
+		remnants      jobs.RemnantSource
+		queueStore    jobs.QueueStore
+		worker        *jobs.Worker
+		dbHealth      func(context.Context) error
 	)
 	if pool != nil {
 		store := postgres.NewStore(pool)
 		jobsStore, catalogStore, partsStore = store, store, store
+		assemblyStore = store
 		stockStore, plansStore, remnants = store, store, store
+		campaignStore = store
+		kpisStore = store
 		queueStore = store
 		dbHealth = func(c context.Context) error { return postgres.Healthy(c, pool) }
 		worker = jobs.NewWorker(store, service, hub, cfg.Workers)
@@ -113,14 +122,17 @@ func main() {
 	}
 
 	handler := httpserver.New(httpserver.Deps{
-		Config:   cfg,
-		Registry: registry,
-		Jobs:     jobs.NewHandler(service, jobsStore, queueStore, hub, canceller, remnants),
-		Catalog:  catalog.NewHandler(catalogStore),
-		Parts:    parts.NewHandler(partsStore),
-		Stock:    stock.NewHandler(stockStore),
-		Plans:    plans.NewHandler(plansStore),
-		DBHealth: dbHealth,
+		Config:     cfg,
+		Registry:   registry,
+		Jobs:       jobs.NewHandler(service, jobsStore, queueStore, hub, canceller, remnants),
+		Catalog:    catalog.NewHandler(catalogStore),
+		Parts:      parts.NewHandler(partsStore),
+		Assemblies: assemblies.NewHandler(assemblyStore),
+		Stock:      stock.NewHandler(stockStore),
+		Plans:      plans.NewHandler(plansStore, service),
+		Campaigns:  campaigns.NewHandler(campaignStore, service, remnants),
+		Kpis:       kpis.NewHandler(kpisStore),
+		DBHealth:   dbHealth,
 	})
 
 	server := &http.Server{

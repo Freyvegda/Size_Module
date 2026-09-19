@@ -14,6 +14,7 @@ import (
 	"github.com/size-module/backend/internal/modules/plans"
 	"github.com/size-module/backend/internal/optimizer"
 	"github.com/size-module/backend/internal/optimizer/core"
+	"github.com/size-module/backend/internal/optimizer/costing"
 	"github.com/size-module/backend/internal/optimizer/validator"
 	"github.com/size-module/backend/internal/platform/db"
 )
@@ -31,20 +32,21 @@ func (s *Store) ListPlans(ctx context.Context, limit, offset int) ([]plans.Summa
 	return out, nil
 }
 
-// GetPlan rebuilds an archived plan into the same shape the optimizer returns,
-// so the plan viewer can render a stored run without a second endpoint. When
-// the linked job input is available the layout is re-validated and re-scored.
-func (s *Store) GetPlan(ctx context.Context, planID string) (plans.Detail, error) {
+// GetPlan rebuilds an archived plan from its sheets and placements, with the
+// per-placement ids and locks an editor needs. When the linked job still has
+// its problem snapshot the layout is re-validated and re-scored, and the
+// unplaced demand is recomputed, so every version reports its own numbers.
+func (s *Store) GetPlan(ctx context.Context, planID string) (plans.PlanData, error) {
 	id, err := uuid.Parse(planID)
 	if err != nil {
-		return plans.Detail{}, plans.ErrNotFound
+		return plans.PlanData{}, plans.ErrNotFound
 	}
 	row, err := s.queries.GetPlan(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return plans.Detail{}, plans.ErrNotFound
+		return plans.PlanData{}, plans.ErrNotFound
 	}
 	if err != nil {
-		return plans.Detail{}, err
+		return plans.PlanData{}, err
 	}
 
 	solution := core.Solution{
@@ -52,16 +54,13 @@ func (s *Store) GetPlan(ctx context.Context, planID string) (plans.Detail, error
 		SolverVersion: row.SolverVersion,
 		Seed:          uint64(row.Seed),
 	}
-	if len(row.Metrics) > 0 {
-		_ = json.Unmarshal(row.Metrics, &solution.Metrics)
-	}
 	if len(row.Notes) > 0 {
 		_ = json.Unmarshal(row.Notes, &solution.Notes)
 	}
 
 	sheets, err := s.queries.ListPlanSheets(ctx, id)
 	if err != nil {
-		return plans.Detail{}, err
+		return plans.PlanData{}, err
 	}
 	for _, sh := range sheets {
 		plan := core.SheetPlan{
@@ -80,16 +79,18 @@ func (s *Store) GetPlan(ctx context.Context, planID string) (plans.Detail, error
 		}
 		placements, err := s.queries.ListPlacements(ctx, sh.ID)
 		if err != nil {
-			return plans.Detail{}, err
+			return plans.PlanData{}, err
 		}
 		for _, p := range placements {
 			placement := core.Placement{
+				ID:       p.ID.String(),
 				PartCode: p.PartCode,
 				X:        p.XUm,
 				Y:        p.YUm,
 				W:        p.WUm,
 				H:        p.HUm,
 				Rotated:  p.Rotated,
+				Locked:   p.Locked,
 			}
 			if p.PartID.Valid {
 				placement.PartID = uuid.UUID(p.PartID.Bytes).String()
@@ -99,40 +100,82 @@ func (s *Store) GetPlan(ctx context.Context, planID string) (plans.Detail, error
 		solution.Sheets = append(solution.Sheets, plan)
 	}
 
-	result := optimizer.Result{Solution: solution}
-	problem, archived, hasSnapshot := s.planSnapshot(ctx, s.queries, row.JobID)
-	if hasSnapshot && archived != nil {
-		// The archived result is the exact answer the solver produced
-		// (including unplaced demand and violations); prefer it over a
-		// reconstruction, which cannot recover everything.
-		return plans.Detail{Summary: planSummary(row), Result: *archived}, nil
+	data := plans.PlanData{Summary: planSummary(row)}
+	if len(row.Rules) > 0 {
+		_ = json.Unmarshal(row.Rules, &data.Rules)
 	}
+	problem, _, hasSnapshot := s.planSnapshot(ctx, s.queries, row.JobID)
 	if hasSnapshot {
-		resolvePartIDs(solution.Sheets, problem)
-		result.Violations = validator.Validate(problem, solution)
-		result.Score = core.Score(problem, solution.Metrics)
+		plans.ResolvePartIDs(solution.Sheets, problem)
+		solution.Unplaced = plans.SynthesizeUnplaced(problem, solution)
+		stored := core.Metrics{}
+		if len(row.Metrics) > 0 {
+			_ = json.Unmarshal(row.Metrics, &stored)
+		}
+		solution.Metrics = core.Summarize(problem, solution.Sheets, solution.Unplaced, stored.ElapsedMS)
+		data.Problem = &problem
+		data.Violations = validator.Validate(problem, solution)
+		data.Score = core.Score(problem, solution.Metrics)
+		data.Cost = costing.Breakdown(problem, solution)
+	} else if len(row.Metrics) > 0 {
+		_ = json.Unmarshal(row.Metrics, &solution.Metrics)
 	}
-	return plans.Detail{Summary: planSummary(row), Result: result}, nil
+	data.Solution = solution
+	return data, nil
 }
 
-// resolvePartIDs fills placement part ids from the problem snapshot by part
-// code; archived placements only store the code, and the validator needs the
-// id to check orientation and demand.
-func resolvePartIDs(sheets []core.SheetPlan, problem core.Problem) {
-	byCode := map[string]string{}
-	for _, part := range problem.Parts {
-		if _, exists := byCode[part.Code]; !exists {
-			byCode[part.Code] = part.ID
-		}
+// SaveVersion stores an edited or re-solved layout as the next version of the
+// source plan and archives the source in the same transaction.
+func (s *Store) SaveVersion(ctx context.Context, src plans.PlanData, problem core.Problem, sol core.Solution, name string) (plans.PlanData, error) {
+	srcID, err := uuid.Parse(src.ID)
+	if err != nil {
+		return plans.PlanData{}, plans.ErrNotFound
 	}
-	for si := range sheets {
-		for pi := range sheets[si].Placements {
-			pl := &sheets[si].Placements[pi]
-			if pl.PartID == "" {
-				pl.PartID = byCode[pl.PartCode]
-			}
-		}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return plans.PlanData{}, err
 	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	row, err := q.GetPlanForUpdate(ctx, srcID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return plans.PlanData{}, plans.ErrNotFound
+	}
+	if err != nil {
+		return plans.PlanData{}, err
+	}
+	if row.Status != "draft" && row.Status != "approved" {
+		return plans.PlanData{}, plans.ErrNotEditable
+	}
+
+	displayName := strings.TrimSpace(name)
+	if displayName == "" {
+		displayName = row.Name
+	}
+	if displayName == "" {
+		displayName = "Optimization run"
+	}
+
+	planID, err := writePlan(ctx, q, planParams{
+		PlantID:      row.PlantID,
+		JobID:        row.JobID,
+		ParentPlanID: pgtypeUUID(srcID),
+		Version:      row.Version + 1,
+		Status:       "draft",
+		Name:         displayName,
+	}, problem, optimizer.Result{Solution: sol})
+	if err != nil {
+		return plans.PlanData{}, err
+	}
+	if _, err := q.ArchivePlan(ctx, srcID); err != nil {
+		return plans.PlanData{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return plans.PlanData{}, err
+	}
+	return s.GetPlan(ctx, planID.String())
 }
 
 // AcceptPlan freezes a plan and applies it to the shop: physical pieces are
@@ -208,6 +251,8 @@ func (s *Store) AcceptPlan(ctx context.Context, planID string) (plans.AcceptResu
 			}
 			if consumed > 0 {
 				result.StockConsumed = append(result.StockConsumed, item.Label)
+			} else {
+				result.StockShortages++
 			}
 		} else if format != nil {
 			if format.OnHandQty > 0 {
@@ -358,6 +403,9 @@ func planSummary(row db.Plan) plans.Summary {
 	}
 	if row.JobID.Valid {
 		summary.JobID = uuid.UUID(row.JobID.Bytes).String()
+	}
+	if row.ParentPlanID.Valid {
+		summary.ParentPlanID = uuid.UUID(row.ParentPlanID.Bytes).String()
 	}
 	if len(row.Metrics) > 0 {
 		_ = json.Unmarshal(row.Metrics, &summary.Metrics)

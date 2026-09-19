@@ -100,6 +100,109 @@ func (s *Store) ListStockFormats(ctx context.Context) ([]catalog.StockFormat, er
 	return out, nil
 }
 
+// --------------------------------------------------------- material specs ---
+
+func (s *Store) ListMaterialSpecs(ctx context.Context) ([]catalog.MaterialSpec, error) {
+	rows, err := s.queries.ListMaterialSpecOptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]catalog.MaterialSpec, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, catalog.MaterialSpec{
+			ID:               r.ID.String(),
+			MaterialID:       r.MaterialID.String(),
+			MaterialCode:     r.MaterialCode,
+			MaterialName:     r.MaterialName,
+			DimensionProfile: r.DimensionProfile,
+			Code:             r.Code,
+			Name:             r.Name,
+			ThicknessMicron:  r.ThicknessUm,
+			Finish:           r.Finish,
+			Color:            r.Color,
+		})
+	}
+	return out, nil
+}
+
+func (s *Store) CreateMaterialSpec(ctx context.Context, in catalog.CreateMaterialSpecInput) (catalog.MaterialSpec, error) {
+	materialID, err := uuid.Parse(in.MaterialID)
+	if err != nil {
+		return catalog.MaterialSpec{}, fmt.Errorf("materialId is not a valid uuid: %w", err)
+	}
+	row, err := s.queries.CreateMaterialSpec(ctx, db.CreateMaterialSpecParams{
+		MaterialID:  materialID,
+		Code:        in.Code,
+		Name:        in.Name,
+		ThicknessUm: in.ThicknessMicron,
+		Finish:      in.Finish,
+		Color:       in.Color,
+		Attributes:  marshalJSON(nil),
+	})
+	if err != nil {
+		return catalog.MaterialSpec{}, err
+	}
+	// Enrich with the family so the response mirrors the list shape.
+	material, err := s.queries.GetMaterial(ctx, row.MaterialID)
+	if err != nil {
+		return catalog.MaterialSpec{}, err
+	}
+	return catalog.MaterialSpec{
+		ID:               row.ID.String(),
+		MaterialID:       row.MaterialID.String(),
+		MaterialCode:     material.Code,
+		MaterialName:     material.Name,
+		DimensionProfile: material.DimensionProfile,
+		Code:             row.Code,
+		Name:             row.Name,
+		ThicknessMicron:  row.ThicknessUm,
+		Finish:           row.Finish,
+		Color:            row.Color,
+	}, nil
+}
+
+func (s *Store) CreateStockFormat(ctx context.Context, in catalog.CreateStockFormatInput) (catalog.StockFormat, error) {
+	plant, err := s.defaultPlant(ctx)
+	if err != nil {
+		return catalog.StockFormat{}, err
+	}
+	specID, err := uuid.Parse(in.MaterialSpecID)
+	if err != nil {
+		return catalog.StockFormat{}, fmt.Errorf("materialSpecId is not a valid uuid: %w", err)
+	}
+	row, err := s.queries.CreateStockFormat(ctx, db.CreateStockFormatParams{
+		PlantID:        plant.ID,
+		MaterialSpecID: specID,
+		Code:           in.Code,
+		LengthUm:       in.LengthMicron,
+		WidthUm:        in.WidthMicron,
+		HeightUm:       in.HeightMicron,
+		OnHandQty:      in.OnHandQty,
+		CostPerUnit:    in.CostPerUnit,
+	})
+	if err != nil {
+		return catalog.StockFormat{}, err
+	}
+	detail, err := s.queries.GetStockFormatDetail(ctx, row.ID)
+	if err != nil {
+		return catalog.StockFormat{}, err
+	}
+	return catalog.StockFormat{
+		ID:               detail.ID.String(),
+		Code:             detail.Code,
+		MaterialCode:     detail.MaterialCode,
+		MaterialName:     detail.MaterialName,
+		SpecCode:         detail.SpecCode,
+		DimensionProfile: detail.DimensionProfile,
+		ThicknessMicron:  detail.ThicknessUm,
+		LengthMicron:     detail.LengthUm,
+		WidthMicron:      detail.WidthUm,
+		HeightMicron:     detail.HeightUm,
+		OnHandQty:        detail.OnHandQty,
+		CostPerUnit:      detail.CostPerUnit,
+	}, nil
+}
+
 // ------------------------------------------------------------------ parts ---
 
 func (s *Store) ListParts(ctx context.Context) ([]parts.Part, error) {
@@ -198,7 +301,13 @@ func (s *Store) SaveRun(ctx context.Context, req jobs.SaveRunRequest) (jobs.Save
 		return jobs.SavedRun{}, err
 	}
 
-	planID, err := writePlan(ctx, q, plant.ID, job.ID, req.Problem, req.Result)
+	planID, err := writePlan(ctx, q, planParams{
+		PlantID: plant.ID,
+		JobID:   pgtypeUUID(job.ID),
+		Version: 1,
+		Status:  "draft",
+		Name:    "Optimization run",
+	}, req.Problem, req.Result)
 	if err != nil {
 		return jobs.SavedRun{}, err
 	}

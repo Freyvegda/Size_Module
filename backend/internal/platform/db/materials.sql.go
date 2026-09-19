@@ -113,6 +113,68 @@ func (q *Queries) GetMaterial(ctx context.Context, id uuid.UUID) (Material, erro
 	return i, err
 }
 
+const listMaterialSpecOptions = `-- name: ListMaterialSpecOptions :many
+SELECT
+    ms.id,
+    ms.material_id,
+    ms.code,
+    ms.name,
+    ms.thickness_um,
+    ms.finish,
+    ms.color,
+    m.code             AS material_code,
+    m.name             AS material_name,
+    m.dimension_profile
+FROM material_specs ms
+JOIN materials m ON m.id = ms.material_id
+WHERE m.is_active
+ORDER BY m.code, ms.code
+`
+
+type ListMaterialSpecOptionsRow struct {
+	ID               uuid.UUID `json:"id"`
+	MaterialID       uuid.UUID `json:"material_id"`
+	Code             string    `json:"code"`
+	Name             string    `json:"name"`
+	ThicknessUm      int64     `json:"thickness_um"`
+	Finish           string    `json:"finish"`
+	Color            string    `json:"color"`
+	MaterialCode     string    `json:"material_code"`
+	MaterialName     string    `json:"material_name"`
+	DimensionProfile string    `json:"dimension_profile"`
+}
+
+func (q *Queries) ListMaterialSpecOptions(ctx context.Context) ([]ListMaterialSpecOptionsRow, error) {
+	rows, err := q.db.Query(ctx, listMaterialSpecOptions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMaterialSpecOptionsRow{}
+	for rows.Next() {
+		var i ListMaterialSpecOptionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.MaterialID,
+			&i.Code,
+			&i.Name,
+			&i.ThicknessUm,
+			&i.Finish,
+			&i.Color,
+			&i.MaterialCode,
+			&i.MaterialName,
+			&i.DimensionProfile,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMaterialSpecs = `-- name: ListMaterialSpecs :many
 SELECT id, material_id, code, name, thickness_um, finish, color, attributes, created_at, updated_at
 FROM material_specs

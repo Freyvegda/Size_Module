@@ -91,11 +91,11 @@ func TestPlanAcceptCreatesRemnants(t *testing.T) {
 	if detail.Status != "draft" {
 		t.Fatalf("fresh plan status = %q, want draft", detail.Status)
 	}
-	if len(detail.Result.Solution.Sheets) != 1 || len(detail.Result.Solution.Sheets[0].Offcuts) != 1 {
-		t.Fatalf("archived plan lost its layout: %+v", detail.Result.Solution.Sheets)
+	if len(detail.Solution.Sheets) != 1 || len(detail.Solution.Sheets[0].Offcuts) != 1 {
+		t.Fatalf("archived plan lost its layout: %+v", detail.Solution.Sheets)
 	}
-	if detail.Result.Solution.Metrics.PartsPlaced != 1 {
-		t.Fatalf("archived metrics look wrong: %+v", detail.Result.Solution.Metrics)
+	if detail.Solution.Metrics.PartsPlaced != 1 {
+		t.Fatalf("archived metrics look wrong: %+v", detail.Solution.Metrics)
 	}
 
 	accepted, err := store.AcceptPlan(ctx, saved.PlanID)

@@ -1,6 +1,6 @@
 -- name: CreatePlan :one
-INSERT INTO plans (plant_id, job_id, version, status, name, solver, solver_version, seed, rules, metrics, notes)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+INSERT INTO plans (plant_id, job_id, parent_plan_id, version, status, name, solver, solver_version, seed, rules, metrics, notes)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING *;
 
 -- name: GetPlan :one
@@ -33,6 +33,12 @@ INSERT INTO plan_sheets (plan_id, sheet_index, stock_code, stock_id, stock_item_
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING *;
 
+-- name: ArchivePlan :execrows
+-- Retires a plan version that has been superseded by an edit or re-solve.
+UPDATE plans
+SET status = 'archived', updated_at = now()
+WHERE id = $1 AND status IN ('draft', 'approved');
+
 -- name: ListPlanSheets :many
 SELECT *
 FROM plan_sheets
@@ -40,8 +46,8 @@ WHERE plan_id = $1
 ORDER BY sheet_index;
 
 -- name: CreatePlacement :one
-INSERT INTO placements (plan_sheet_id, part_id, part_code, x_um, y_um, w_um, h_um, rotated, seq)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO placements (plan_sheet_id, part_id, part_code, x_um, y_um, w_um, h_um, rotated, locked, seq)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING *;
 
 -- name: ListPlacements :many

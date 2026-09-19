@@ -86,7 +86,13 @@ func (s *Store) Complete(ctx context.Context, job jobs.QueuedJob, result optimiz
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := s.queries.WithTx(tx)
 
-	planID, err := writePlan(ctx, q, plant.ID, jobID, job.Problem, result)
+	planID, err := writePlan(ctx, q, planParams{
+		PlantID: plant.ID,
+		JobID:   pgtypeUUID(jobID),
+		Version: 1,
+		Status:  "draft",
+		Name:    "Optimization run",
+	}, job.Problem, result)
 	if err != nil {
 		return "", err
 	}

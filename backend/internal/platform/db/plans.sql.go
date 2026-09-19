@@ -16,7 +16,7 @@ const acceptPlan = `-- name: AcceptPlan :one
 UPDATE plans
 SET status = 'accepted', accepted_at = now(), updated_at = now()
 WHERE id = $1 AND status IN ('draft', 'approved')
-RETURNING id, plant_id, job_id, version, status, name, solver, solver_version, seed, rules, metrics, notes, created_at, updated_at, accepted_at
+RETURNING id, plant_id, job_id, version, status, name, solver, solver_version, seed, rules, metrics, notes, created_at, updated_at, accepted_at, parent_plan_id
 `
 
 // Freezes a plan: only draft or approved plans can be accepted, and the guard
@@ -40,14 +40,30 @@ func (q *Queries) AcceptPlan(ctx context.Context, id uuid.UUID) (Plan, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.AcceptedAt,
+		&i.ParentPlanID,
 	)
 	return i, err
 }
 
+const archivePlan = `-- name: ArchivePlan :execrows
+UPDATE plans
+SET status = 'archived', updated_at = now()
+WHERE id = $1 AND status IN ('draft', 'approved')
+`
+
+// Retires a plan version that has been superseded by an edit or re-solve.
+func (q *Queries) ArchivePlan(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, archivePlan, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createPlacement = `-- name: CreatePlacement :one
-INSERT INTO placements (plan_sheet_id, part_id, part_code, x_um, y_um, w_um, h_um, rotated, seq)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, plan_sheet_id, part_id, part_code, x_um, y_um, w_um, h_um, rotated, seq
+INSERT INTO placements (plan_sheet_id, part_id, part_code, x_um, y_um, w_um, h_um, rotated, locked, seq)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, plan_sheet_id, part_id, part_code, x_um, y_um, w_um, h_um, rotated, seq, locked
 `
 
 type CreatePlacementParams struct {
@@ -59,6 +75,7 @@ type CreatePlacementParams struct {
 	WUm         int64       `json:"w_um"`
 	HUm         int64       `json:"h_um"`
 	Rotated     bool        `json:"rotated"`
+	Locked      bool        `json:"locked"`
 	Seq         int32       `json:"seq"`
 }
 
@@ -72,6 +89,7 @@ func (q *Queries) CreatePlacement(ctx context.Context, arg CreatePlacementParams
 		arg.WUm,
 		arg.HUm,
 		arg.Rotated,
+		arg.Locked,
 		arg.Seq,
 	)
 	var i Placement
@@ -86,19 +104,21 @@ func (q *Queries) CreatePlacement(ctx context.Context, arg CreatePlacementParams
 		&i.HUm,
 		&i.Rotated,
 		&i.Seq,
+		&i.Locked,
 	)
 	return i, err
 }
 
 const createPlan = `-- name: CreatePlan :one
-INSERT INTO plans (plant_id, job_id, version, status, name, solver, solver_version, seed, rules, metrics, notes)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, plant_id, job_id, version, status, name, solver, solver_version, seed, rules, metrics, notes, created_at, updated_at, accepted_at
+INSERT INTO plans (plant_id, job_id, parent_plan_id, version, status, name, solver, solver_version, seed, rules, metrics, notes)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, plant_id, job_id, version, status, name, solver, solver_version, seed, rules, metrics, notes, created_at, updated_at, accepted_at, parent_plan_id
 `
 
 type CreatePlanParams struct {
 	PlantID       uuid.UUID   `json:"plant_id"`
 	JobID         pgtype.UUID `json:"job_id"`
+	ParentPlanID  pgtype.UUID `json:"parent_plan_id"`
 	Version       int32       `json:"version"`
 	Status        string      `json:"status"`
 	Name          string      `json:"name"`
@@ -114,6 +134,7 @@ func (q *Queries) CreatePlan(ctx context.Context, arg CreatePlanParams) (Plan, e
 	row := q.db.QueryRow(ctx, createPlan,
 		arg.PlantID,
 		arg.JobID,
+		arg.ParentPlanID,
 		arg.Version,
 		arg.Status,
 		arg.Name,
@@ -141,6 +162,7 @@ func (q *Queries) CreatePlan(ctx context.Context, arg CreatePlanParams) (Plan, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.AcceptedAt,
+		&i.ParentPlanID,
 	)
 	return i, err
 }
@@ -195,7 +217,7 @@ func (q *Queries) CreatePlanSheet(ctx context.Context, arg CreatePlanSheetParams
 }
 
 const getPlan = `-- name: GetPlan :one
-SELECT id, plant_id, job_id, version, status, name, solver, solver_version, seed, rules, metrics, notes, created_at, updated_at, accepted_at
+SELECT id, plant_id, job_id, version, status, name, solver, solver_version, seed, rules, metrics, notes, created_at, updated_at, accepted_at, parent_plan_id
 FROM plans
 WHERE id = $1
 `
@@ -219,12 +241,13 @@ func (q *Queries) GetPlan(ctx context.Context, id uuid.UUID) (Plan, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.AcceptedAt,
+		&i.ParentPlanID,
 	)
 	return i, err
 }
 
 const getPlanForUpdate = `-- name: GetPlanForUpdate :one
-SELECT id, plant_id, job_id, version, status, name, solver, solver_version, seed, rules, metrics, notes, created_at, updated_at, accepted_at
+SELECT id, plant_id, job_id, version, status, name, solver, solver_version, seed, rules, metrics, notes, created_at, updated_at, accepted_at, parent_plan_id
 FROM plans
 WHERE id = $1
 FOR UPDATE
@@ -249,6 +272,7 @@ func (q *Queries) GetPlanForUpdate(ctx context.Context, id uuid.UUID) (Plan, err
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.AcceptedAt,
+		&i.ParentPlanID,
 	)
 	return i, err
 }
@@ -280,7 +304,7 @@ func (q *Queries) InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) 
 }
 
 const listPlacements = `-- name: ListPlacements :many
-SELECT id, plan_sheet_id, part_id, part_code, x_um, y_um, w_um, h_um, rotated, seq
+SELECT id, plan_sheet_id, part_id, part_code, x_um, y_um, w_um, h_um, rotated, seq, locked
 FROM placements
 WHERE plan_sheet_id = $1
 ORDER BY seq
@@ -306,6 +330,7 @@ func (q *Queries) ListPlacements(ctx context.Context, planSheetID uuid.UUID) ([]
 			&i.HUm,
 			&i.Rotated,
 			&i.Seq,
+			&i.Locked,
 		); err != nil {
 			return nil, err
 		}
@@ -357,7 +382,7 @@ func (q *Queries) ListPlanSheets(ctx context.Context, planID uuid.UUID) ([]PlanS
 }
 
 const listPlans = `-- name: ListPlans :many
-SELECT id, plant_id, job_id, version, status, name, solver, solver_version, seed, rules, metrics, notes, created_at, updated_at, accepted_at
+SELECT id, plant_id, job_id, version, status, name, solver, solver_version, seed, rules, metrics, notes, created_at, updated_at, accepted_at, parent_plan_id
 FROM plans
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
@@ -393,6 +418,7 @@ func (q *Queries) ListPlans(ctx context.Context, arg ListPlansParams) ([]Plan, e
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.AcceptedAt,
+			&i.ParentPlanID,
 		); err != nil {
 			return nil, err
 		}

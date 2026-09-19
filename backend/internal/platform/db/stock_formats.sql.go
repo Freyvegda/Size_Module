@@ -83,6 +83,73 @@ func (q *Queries) GetStockFormat(ctx context.Context, id uuid.UUID) (StockFormat
 	return i, err
 }
 
+const getStockFormatDetail = `-- name: GetStockFormatDetail :one
+SELECT
+    sf.id,
+    sf.plant_id,
+    sf.material_spec_id,
+    sf.code,
+    sf.length_um,
+    sf.width_um,
+    sf.height_um,
+    sf.on_hand_qty,
+    sf.cost_per_unit,
+    sf.is_active,
+    ms.code        AS spec_code,
+    ms.thickness_um,
+    ms.finish,
+    m.code         AS material_code,
+    m.name         AS material_name,
+    m.dimension_profile
+FROM stock_formats sf
+JOIN material_specs ms ON ms.id = sf.material_spec_id
+JOIN materials m ON m.id = ms.material_id
+WHERE sf.id = $1
+`
+
+type GetStockFormatDetailRow struct {
+	ID               uuid.UUID `json:"id"`
+	PlantID          uuid.UUID `json:"plant_id"`
+	MaterialSpecID   uuid.UUID `json:"material_spec_id"`
+	Code             string    `json:"code"`
+	LengthUm         int64     `json:"length_um"`
+	WidthUm          int64     `json:"width_um"`
+	HeightUm         int64     `json:"height_um"`
+	OnHandQty        int32     `json:"on_hand_qty"`
+	CostPerUnit      float64   `json:"cost_per_unit"`
+	IsActive         bool      `json:"is_active"`
+	SpecCode         string    `json:"spec_code"`
+	ThicknessUm      int64     `json:"thickness_um"`
+	Finish           string    `json:"finish"`
+	MaterialCode     string    `json:"material_code"`
+	MaterialName     string    `json:"material_name"`
+	DimensionProfile string    `json:"dimension_profile"`
+}
+
+func (q *Queries) GetStockFormatDetail(ctx context.Context, id uuid.UUID) (GetStockFormatDetailRow, error) {
+	row := q.db.QueryRow(ctx, getStockFormatDetail, id)
+	var i GetStockFormatDetailRow
+	err := row.Scan(
+		&i.ID,
+		&i.PlantID,
+		&i.MaterialSpecID,
+		&i.Code,
+		&i.LengthUm,
+		&i.WidthUm,
+		&i.HeightUm,
+		&i.OnHandQty,
+		&i.CostPerUnit,
+		&i.IsActive,
+		&i.SpecCode,
+		&i.ThicknessUm,
+		&i.Finish,
+		&i.MaterialCode,
+		&i.MaterialName,
+		&i.DimensionProfile,
+	)
+	return i, err
+}
+
 const listStockFormats = `-- name: ListStockFormats :many
 SELECT
     sf.id,

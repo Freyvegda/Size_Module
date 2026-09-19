@@ -1,8 +1,6 @@
-// Package plans serves archived optimization plans and their acceptance.
-//
-// Accepting a plan is the point where a layout becomes shop reality: catalog
-// on-hand quantities go down, physical pieces are consumed, and every reusable
-// offcut is registered as a labelled remnant that later solves can pick up.
+// Package plans serves archived optimization plans: reading them back with
+// editable placement identities, accepting them into the shop, hand edits with
+// locked placements, re-solving around those locks, and exports.
 package plans
 
 import (
@@ -12,6 +10,8 @@ import (
 
 	"github.com/size-module/backend/internal/optimizer"
 	"github.com/size-module/backend/internal/optimizer/core"
+	"github.com/size-module/backend/internal/optimizer/costing"
+	"github.com/size-module/backend/internal/optimizer/validator"
 )
 
 var (
@@ -19,12 +19,19 @@ var (
 	ErrNotFound = errors.New("plan not found")
 	// ErrNotAcceptable is returned when a plan is not draft or approved.
 	ErrNotAcceptable = errors.New("plan is not in a state that can be accepted")
+	// ErrNotEditable is returned when an edit or re-solve targets a plan that
+	// was already accepted or archived.
+	ErrNotEditable = errors.New("plan is not in a state that can be edited")
+	// ErrNoProblem is returned when the plan has no problem snapshot to edit
+	// or re-solve against.
+	ErrNoProblem = errors.New("plan has no problem snapshot")
 )
 
 // Summary is one row of the plan list.
 type Summary struct {
 	ID            string       `json:"id"`
 	JobID         string       `json:"jobId,omitempty"`
+	ParentPlanID  string       `json:"parentPlanId,omitempty"`
 	Status        string       `json:"status"`
 	Version       int          `json:"version"`
 	Name          string       `json:"name,omitempty"`
@@ -40,7 +47,23 @@ type Summary struct {
 // optimizer returns so the viewer can render it without a second endpoint.
 type Detail struct {
 	Summary
+	// Rules are the constraint values the plan was created with, so an editor
+	// can clamp moves to the trim and show them.
+	Rules  core.Rules       `json:"rules"`
 	Result optimizer.Result `json:"result"`
+}
+
+// PlanData is the persistence view of a plan: the summary, the problem
+// snapshot behind it and the layout with per-placement ids and lock flags.
+// Handlers convert it into the API Detail; edit and re-solve operate on it.
+type PlanData struct {
+	Summary
+	Problem    *core.Problem
+	Rules      core.Rules
+	Solution   core.Solution
+	Score      float64
+	Violations []validator.Violation
+	Cost       costing.Report
 }
 
 // RemnantRef identifies a remnant created by accepting a plan.
@@ -61,6 +84,9 @@ type AcceptResult struct {
 	RemnantsCreated []RemnantRef `json:"remnantsCreated"`
 	// StockConsumed lists the labels of physical pieces that were used up.
 	StockConsumed []string `json:"stockConsumed"`
+	// StockShortages counts physical pieces that were already consumed by
+	// another plan and could not be taken again.
+	StockShortages int `json:"stockShortages"`
 	// FormatDecrements counts sheets taken from catalog on-hand quantities.
 	FormatDecrements int `json:"formatDecrements"`
 	// FormatShortages counts sheets whose format had no on-hand stock left to
@@ -72,6 +98,26 @@ type AcceptResult struct {
 // because the same store also serves the job queue.
 type Store interface {
 	ListPlans(ctx context.Context, limit, offset int) ([]Summary, error)
-	GetPlan(ctx context.Context, id string) (Detail, error)
+	GetPlan(ctx context.Context, id string) (PlanData, error)
 	AcceptPlan(ctx context.Context, id string) (AcceptResult, error)
+	// SaveVersion stores an edited or re-solved layout as the next version of
+	// the source plan and archives the source.
+	SaveVersion(ctx context.Context, src PlanData, problem core.Problem, sol core.Solution, name string) (PlanData, error)
+}
+
+// Editable reports whether a plan status can be edited or re-solved.
+func Editable(status string) bool { return status == "draft" || status == "approved" }
+
+// DetailOf converts the persistence view into the API response.
+func DetailOf(data PlanData) Detail {
+	return Detail{
+		Summary: data.Summary,
+		Rules:   data.Rules,
+		Result: optimizer.Result{
+			Solution:   data.Solution,
+			Violations: data.Violations,
+			Score:      data.Score,
+			Cost:       data.Cost,
+		},
+	}
 }
