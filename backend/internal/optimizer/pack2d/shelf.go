@@ -117,7 +117,7 @@ func (s *ShelfSolver) Solve(ctx context.Context, p core.Problem, progress core.P
 			plan.Offcuts = findOffcuts(usable, plan.Placements, rules)
 
 			if rules.CutMode == core.CutGuillotine {
-				steps, ok := cutter.ForSheet(plan, rules.Kerf)
+				steps, ok := cutter.ForSheetStages(plan, rules.Kerf, rules.MaxCutStages)
 				if ok {
 					plan.CutSteps = steps
 				} else {

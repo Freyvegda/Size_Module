@@ -869,7 +869,7 @@ func (s *ColumnSolver) assemble(
 	// Cut instructions for the pattern sheets (the beam adds its own).
 	for i := range sheets {
 		if len(sheets[i].CutSteps) == 0 {
-			if steps, ok := cutter.ForSheet(sheets[i], rules.Kerf); ok {
+			if steps, ok := cutter.ForSheetStages(sheets[i], rules.Kerf, rules.MaxCutStages); ok {
 				sheets[i].CutSteps = steps
 			}
 		}

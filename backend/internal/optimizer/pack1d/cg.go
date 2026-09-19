@@ -821,7 +821,7 @@ func buildBarSheet(bar barState, index int, rules core.Rules) core.SheetPlan {
 			sheet.Offcuts = []core.Rect{{X: x + rules.Kerf, Y: 0, W: rem, H: sheet.Height}}
 		}
 	}
-	if steps, ok := cutter.ForSheet(sheet, rules.Kerf); ok {
+	if steps, ok := cutter.ForSheetStages(sheet, rules.Kerf, rules.MaxCutStages); ok {
 		sheet.CutSteps = steps
 	}
 	return sheet

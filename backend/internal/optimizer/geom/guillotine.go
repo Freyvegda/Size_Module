@@ -28,7 +28,17 @@ func (n *CutNode) IsLeaf() bool { return n == nil || len(n.Children) == 0 }
 //
 // The search probes cut lines that run along part edges (left edge minus kerf
 // and right edge) so a found tree is directly translatable into instructions.
+//
+// It places no limit on the number of guillotine stages; use
+// BuildCutTreeStages to enforce a machine's stage limit.
 func BuildCutTree(region core.Rect, rects []core.Rect, ids []string, kerf core.Dim, budget int) (*CutNode, bool) {
+	return BuildCutTreeStages(region, rects, ids, kerf, budget, 0)
+}
+
+// BuildCutTreeStages is BuildCutTree with a guillotine stage limit. maxStages
+// counts cuts along a root-to-leaf path: shelf packing (rip strips, then
+// crosscut each strip) is 2 stages. 0 means unlimited.
+func BuildCutTreeStages(region core.Rect, rects []core.Rect, ids []string, kerf core.Dim, budget, maxStages int) (*CutNode, bool) {
 	if budget <= 0 {
 		budget = 50_000
 	}
@@ -57,16 +67,32 @@ func BuildCutTree(region core.Rect, rects []core.Rect, ids []string, kerf core.D
 		sortedIDs[i] = ids[idx]
 	}
 
-	b := &treeBuilder{kerf: kerf, budget: budget}
-	return b.build(region, sortedRects, sortedIDs)
+	b := &treeBuilder{kerf: kerf, budget: budget, maxStages: maxStages}
+	return b.build(region, sortedRects, sortedIDs, 0)
+}
+
+// CutTreeStages returns the number of cuts on the longest root-to-leaf path
+// (0 for a single piece or an empty region). It is how callers verify a layout
+// against Rules.MaxCutStages.
+func CutTreeStages(node *CutNode) int {
+	if node == nil || node.IsLeaf() {
+		return 0
+	}
+	left := CutTreeStages(node.Children[0])
+	right := CutTreeStages(node.Children[1])
+	if right > left {
+		left = right
+	}
+	return left + 1
 }
 
 type treeBuilder struct {
-	kerf   core.Dim
-	budget int
+	kerf      core.Dim
+	budget    int
+	maxStages int
 }
 
-func (b *treeBuilder) build(region core.Rect, rects []core.Rect, ids []string) (*CutNode, bool) {
+func (b *treeBuilder) build(region core.Rect, rects []core.Rect, ids []string, depth int) (*CutNode, bool) {
 	if b.budget <= 0 {
 		return nil, false
 	}
@@ -88,17 +114,23 @@ func (b *treeBuilder) build(region core.Rect, rects []core.Rect, ids []string) (
 		return &CutNode{Region: region, PartID: ids[0], PartCode: ids[0], Part: &r}, true
 	}
 
+	// A stage limit means this region cannot be cut again: more than one piece
+	// left here has no valid sequence within the budget.
+	if b.maxStages > 0 && depth >= b.maxStages {
+		return nil, false
+	}
+
 	// Try vertical cuts first, then horizontal ones.
-	if node, ok := b.tryCut(region, rects, ids, "v"); ok {
+	if node, ok := b.tryCut(region, rects, ids, "v", depth); ok {
 		return node, true
 	}
-	if node, ok := b.tryCut(region, rects, ids, "h"); ok {
+	if node, ok := b.tryCut(region, rects, ids, "h", depth); ok {
 		return node, true
 	}
 	return nil, false
 }
 
-func (b *treeBuilder) tryCut(region core.Rect, rects []core.Rect, ids []string, axis string) (*CutNode, bool) {
+func (b *treeBuilder) tryCut(region core.Rect, rects []core.Rect, ids []string, axis string, depth int) (*CutNode, bool) {
 	type candidate struct {
 		pos   core.Dim
 		score int
@@ -169,11 +201,11 @@ func (b *treeBuilder) tryCut(region core.Rect, rects []core.Rect, ids []string, 
 			continue
 		}
 
-		leftNode, okL := b.build(regionA, left, leftIDs)
+		leftNode, okL := b.build(regionA, left, leftIDs, depth+1)
 		if !okL {
 			continue
 		}
-		rightNode, okR := b.build(regionB, right, rightIDs)
+		rightNode, okR := b.build(regionB, right, rightIDs, depth+1)
 		if !okR {
 			continue
 		}

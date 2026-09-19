@@ -91,7 +91,7 @@ func (s *MaxRectsSolver) Solve(ctx context.Context, p core.Problem, progress cor
 			}
 			// A free layout only happens to have a guillotine sequence
 			// sometimes; instructions are attached when they exist.
-			if steps, ok := cutter.ForSheet(sheet, rules.Kerf); ok {
+			if steps, ok := cutter.ForSheetStages(sheet, rules.Kerf, rules.MaxCutStages); ok {
 				sheet.CutSteps = steps
 			} else if !freeCutNoted {
 				notes = append(notes, "Free-cut layouts have no guillotine cut sequence; this plan is for a CNC, laser or waterjet.")

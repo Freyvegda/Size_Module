@@ -334,7 +334,7 @@ func sheetFromNode(stock core.StockItem, rules core.Rules, node *beamNode, index
 	if sheet.Label == "" {
 		sheet.Label = stock.Code
 	}
-	if steps, ok := cutter.ForSheet(sheet, rules.Kerf); ok {
+	if steps, ok := cutter.ForSheetStages(sheet, rules.Kerf, rules.MaxCutStages); ok {
 		sheet.CutSteps = steps
 	}
 	return sheet

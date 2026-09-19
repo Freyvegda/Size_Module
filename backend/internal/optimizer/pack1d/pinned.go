@@ -90,7 +90,7 @@ func (s *PinnedSolver) Solve(ctx context.Context, p core.Problem, progress core.
 		plan.Index = len(sheets)
 		lockedCount += len(pin.Placements)
 		if len(plan.Placements) > 0 {
-			if steps, ok := cutter.ForSheet(plan, rules.Kerf); ok {
+			if steps, ok := cutter.ForSheetStages(plan, rules.Kerf, rules.MaxCutStages); ok {
 				plan.CutSteps = steps
 			}
 		}
@@ -175,7 +175,7 @@ func (s *PinnedSolver) Solve(ctx context.Context, p core.Problem, progress core.
 			if rem := stock.Length - rules.Trim - (cursor + rules.Kerf); rem >= rules.OffcutMinLength && rules.OffcutMinLength > 0 && rem > 0 {
 				plan.Offcuts = []core.Rect{{X: cursor + rules.Kerf, Y: 0, W: rem, H: barH}}
 			}
-			if steps, ok := cutter.ForSheet(plan, rules.Kerf); ok {
+			if steps, ok := cutter.ForSheetStages(plan, rules.Kerf, rules.MaxCutStages); ok {
 				plan.CutSteps = steps
 			}
 			sheets = append(sheets, plan)

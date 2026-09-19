@@ -134,7 +134,7 @@ func (s *FFDSolver) Solve(ctx context.Context, p core.Problem, progress core.Pro
 			if rem := stock.Length - rules.Trim - (cursor + rules.Kerf); rem >= rules.OffcutMinLength && rules.OffcutMinLength > 0 && rem > 0 {
 				plan.Offcuts = []core.Rect{{X: cursor + rules.Kerf, Y: 0, W: rem, H: barH}}
 			}
-			if steps, ok := cutter.ForSheet(plan, rules.Kerf); ok {
+			if steps, ok := cutter.ForSheetStages(plan, rules.Kerf, rules.MaxCutStages); ok {
 				plan.CutSteps = steps
 			} else {
 				notes = append(notes, "bar "+itoa(plan.Index+1)+": could not derive a cut sequence")

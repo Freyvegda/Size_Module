@@ -79,7 +79,7 @@ func (s *PinnedSolver) Solve(ctx context.Context, p core.Problem, progress core.
 		_ = free
 
 		if rules.CutMode == core.CutGuillotine && len(sheet.Placements) > 0 {
-			steps, ok := cutter.ForSheet(sheet, rules.Kerf)
+			steps, ok := cutter.ForSheetStages(sheet, rules.Kerf, rules.MaxCutStages)
 			if ok {
 				sheet.CutSteps = steps
 			} else {
@@ -135,7 +135,7 @@ func (s *PinnedSolver) Solve(ctx context.Context, p core.Problem, progress core.
 			plan.Offcuts = findOffcuts(usable, plan.Placements, rules)
 
 			if rules.CutMode == core.CutGuillotine {
-				steps, ok := cutter.ForSheet(plan, rules.Kerf)
+				steps, ok := cutter.ForSheetStages(plan, rules.Kerf, rules.MaxCutStages)
 				if ok {
 					plan.CutSteps = steps
 				} else {

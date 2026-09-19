@@ -119,6 +119,12 @@ func Validate(p core.Problem, s core.Solution) []Violation {
 			if _, ok := cutter.ForSheet(sheet, p.Rules.Kerf); !ok {
 				violations = append(violations, errorf("not_guillotine", sheet.Index, "",
 					"sheet %d has no valid guillotine cut sequence", sheet.Index+1))
+			} else if p.Rules.MaxCutStages > 0 {
+				if _, staged := cutter.ForSheetStages(sheet, p.Rules.Kerf, p.Rules.MaxCutStages); !staged {
+					violations = append(violations, errorf("too_many_stages", sheet.Index, "",
+						"sheet %d needs more than the %d allowed guillotine cut stage(s)",
+						sheet.Index+1, p.Rules.MaxCutStages))
+				}
 			}
 		}
 	}
