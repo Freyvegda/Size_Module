@@ -11,7 +11,7 @@ API through `/api` and `/healthz`, which the Vite dev server proxies to
 |---|---|
 | `src/main.tsx` | `createRoot` + Redux `Provider` + `BrowserRouter` + `TooltipProvider` |
 | `src/App.tsx` | routes nested under `AppShell` (index → Dashboard, `viewer`, `materials`, `parts`, `stock`, `jobs`, `settings`, `*` → `/`) |
-| `src/app/` | Redux `store.ts` (slices: `backend`, `assemblies`, `campaigns`, `catalog`, `kpis`, `optimizer`, `viewer`) and typed `hooks.ts` |
+| `src/app/` | Redux `store.ts` (slices: `backend`, `assemblies`, `campaigns`, `catalog`, `kpis`, `optimizer`, `plans`, `rules`, `viewer`) and typed `hooks.ts` |
 | `src/components/layout/AppShell.tsx` | sidebar nav, header, API status badge, `<Outlet/>` |
 | `src/components/ui/` | shadcn primitives (button, card, table, select, tabs, …) |
 | `src/features/backend/` | health + meta slice (async thunks) |
@@ -20,10 +20,11 @@ API through `/api` and `/healthz`, which the Vite dev server proxies to
 | `src/features/catalog/` | materials, material types/brands, parts, stock-format and physical-stock slice (list + create + update thunks) |
 | `src/features/optimizer/` | 1D/2D demo problems, optimization run + solver comparison + async job queue (submit/cancel, SSE progress) slice, `buildProblem.ts` (catalog parts → one problem per material/dimension, using cut sizes), `SolverBadges.tsx` |
 | `src/features/plans/` | archived plan list slice (`fetchPlans`) powering the Plans page |
+| `src/features/rules/` | rules-profile slice (list/create/update over `/api/v1/rules-profiles`) + `RulesProfileEditor` (constraints + objective weights) |
 | `src/features/viewer/` | `PlanViewer.tsx` (panels + edit/export toolbar), `PlanScene.tsx` (three.js ortho 2D / perspective 3D, draggable in edit mode), `BarPlanView.tsx` (1D bars), `viewerSlice.ts`, `partColor.ts` |
 | `src/features/assemblies/` | products (assemblies) slice + preview: `assemblySlice.ts`, `geometry.ts`, `explode.ts` (components → cut parts), `templates.ts` (window/table), `AssemblyViewer.tsx` (2D/3D toggle), `AssemblyElevation.tsx` (SVG), `AssemblyScene.tsx` (lazy three.js) |
-| `src/lib/` | `api.ts` (fetch wrapper + `ApiError`), `types.ts` (hand-written TS mirrors of Go contracts), `results.ts` (nil-slice normalization), `solvers.ts` (registry-compatible solver filtering), `format.ts` (µm→mm), `samplePlan.ts` (2D + 1D fallback plans), `utils.ts` |
-| `src/pages/` | Dashboard, Jobs, Materials, Parts, Products, Stock, PlanViewer, Settings |
+| `src/lib/` | `api.ts` (fetch wrapper + `ApiError`), `types.ts` (hand-written TS mirrors of Go contracts), `results.ts` (nil-slice normalization), `solvers.ts` (registry-compatible solver filtering), `rules.ts` (engine default rules/weights + the override helper), `format.ts` (µm→mm), `samplePlan.ts` (2D + 1D fallback plans), `utils.ts` |
+| `src/pages/` | Dashboard, Jobs, Materials, Parts, Products, Stock, Plans, PlanViewer, Rules, Settings |
 | `public/` | `favicon.svg`, `icons.svg` |
 
 ## Conventions
@@ -45,9 +46,16 @@ API through `/api` and `/healthz`, which the Vite dev server proxies to
   `optimizer` slice tracks `jobRequest` / `jobState` / `jobProgress` and loads
   the archived result into the viewer when the job is done. The queue needs
   PostgreSQL; the Run button uses synchronous `/optimize` and works without it.
-- **Free cutting**: `demoProblemFor('2d', 'free')` sends the *complete* default
-  rules with `cutMode: free`; the server only fills in defaults when the whole
-  rules object is empty, so sending one overridden field would drop kerf/trim.
+- **Rules & objective profiles**: `/rules` manages stored constraint + objective
+  presets (`/api/v1/rules-profiles`), loaded through the `rules` slice. The Jobs
+  and campaign-create pickers offer them. `lib/rules.ts` mirrors the engine
+  defaults; `rulesOverrideFor` builds the *complete* rules to send when the UI
+  overrides a single field (free cutting, or a profile whose cut mode differs) —
+  the server only fills defaults when the whole rules object is empty, so a
+  partial set would drop kerf/trim. A selected profile that needs no override is
+  sent as `?rulesProfileId=` on `/optimize` and `/jobs` (`startAsyncJob`). The
+  campaign form copies the profile's rules/objective into `CreateCampaignInput`
+  because campaign create resolves rules from its body, not the query string.
 - **1D plans** come back as `SheetPlan`s whose width is the bar length. The
   viewer detects them via `optimizer.dimension` and renders `BarPlanView`
   instead of the three.js scene; length metrics live in `stockLengthM` /

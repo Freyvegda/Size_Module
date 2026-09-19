@@ -2,6 +2,7 @@ import { createAction, createAsyncThunk, createSlice, type PayloadAction } from 
 
 import { api } from '@/lib/api'
 import { normalizeResult } from '@/lib/results'
+import { defaultRules } from '@/lib/rules'
 import { sampleBarResult, sampleResult } from '@/lib/samplePlan'
 import type {
   AcceptPlanResponse,
@@ -24,25 +25,11 @@ import type {
 import { isTerminalJobStatus } from '@/lib/types'
 
 /**
- * Mirror of the backend's core.DefaultRules(). The server fills these in when a
- * request has no rules, but a caller that overrides one rule (cut mode) must
- * send the complete set, otherwise the zero values would drop kerf and trim.
+ * Mirror of the backend's core.DefaultRules() lives in `@/lib/rules`; the
+ * server fills defaults in when a request has no rules, but a caller that
+ * overrides one rule (cut mode) must send the complete set, otherwise the zero
+ * values would drop kerf and trim.
  */
-const defaultRules: Rules = {
-  kerf: 4000,
-  trim: 10000,
-  allowRotate: true,
-  grainMode: 'none',
-  cutMode: 'guillotine',
-  maxCutStages: 0,
-  offcutMinW: 300000,
-  offcutMinH: 300000,
-  offcutMinLength: 300000,
-  minPartDim: 0,
-  maxPartsPerSheet: 0,
-  oversAllowedPct: 0,
-  preferRemnants: true,
-}
 
 /** The 2D demo problem, identical to the backend's jobs.DemoProblem(). */
 function demoProblem(): Problem {
@@ -86,6 +73,23 @@ export function demoProblemFor(profile: DimensionProfile, cutMode: CutMode): Pro
   return { ...problem, rules: { ...defaultRules, cutMode: 'free' } }
 }
 
+/**
+ * The demo problem with the rules a caller asked for. An explicit override (a
+ * profile with one field changed, or free cutting) always wins; otherwise a
+ * named profile is left to the server (`?rulesProfileId=`), so the automatic
+ * free-cut defaults must be stripped when a profile is selected.
+ */
+function demoPayload(
+  profile: DimensionProfile,
+  cutMode: CutMode,
+  args?: { rulesOverride?: Rules; rulesProfileId?: string },
+): Problem {
+  const base = demoProblemFor(profile, cutMode)
+  if (args?.rulesOverride) return { ...base, rules: args.rulesOverride }
+  if (args?.rulesProfileId) return { ...base, rules: undefined }
+  return base
+}
+
 export interface ComparisonEntry {
   solver: string
   result: OptimizeResult
@@ -98,6 +102,10 @@ export interface RunDemoArgs {
   solver?: string
   /** Ask the server to append the plant's available remnants before solving. */
   includeRemnants?: boolean
+  /** Stored rules profile the server resolves (ignored when rulesOverride is set). */
+  rulesProfileId?: string
+  /** Complete rules to send: a profile with a field overridden, or free cutting. */
+  rulesOverride?: Rules
 }
 
 export interface CompareSolversArgs {
@@ -107,6 +115,10 @@ export interface CompareSolversArgs {
   solvers: string[]
   /** Ask the server to append the plant's available remnants before solving. */
   includeRemnants?: boolean
+  /** Stored rules profile the server resolves (ignored when rulesOverride is set). */
+  rulesProfileId?: string
+  /** Complete rules to send: a profile with a field overridden, or free cutting. */
+  rulesOverride?: Rules
 }
 
 export interface RunJobArgs {
@@ -116,6 +128,10 @@ export interface RunJobArgs {
   solver?: string
   /** Ask the server to append the plant's available remnants before queueing. */
   includeRemnants?: boolean
+  /** Stored rules profile the server resolves (ignored when rulesOverride is set). */
+  rulesProfileId?: string
+  /** Complete rules to send: a profile with a field overridden, or free cutting. */
+  rulesOverride?: Rules
 }
 
 /** Metrics of a finished plan, shaped like a progress event. */
@@ -228,11 +244,10 @@ export const runDemoOptimization = createAsyncThunk(
     const query = new URLSearchParams()
     if (args?.solver && args.solver !== 'auto') query.set('solver', args.solver)
     if (args?.includeRemnants) query.set('includeRemnants', 'true')
+    if (args?.rulesProfileId) query.set('rulesProfileId', args.rulesProfileId)
     const suffix = query.size > 0 ? `?${query.toString()}` : ''
-    const response = await api.post<OptimizeResponse>(
-      `/api/v1/optimize${suffix}`,
-      demoProblemFor(profile, cutMode),
-    )
+    const payload = demoPayload(profile, cutMode, args)
+    const response = await api.post<OptimizeResponse>(`/api/v1/optimize${suffix}`, payload)
     return { response, dimension: profile }
   },
 )
@@ -271,14 +286,15 @@ export const optimizeProblem = createAsyncThunk(
 export const compareSolvers = createAsyncThunk(
   'optimizer/compareSolvers',
   async (args: CompareSolversArgs) => {
-    const problem = demoProblemFor(args.profile, args.cutMode)
+    const payload = demoPayload(args.profile, args.cutMode, args)
     const entries = await Promise.all(
       args.solvers.map(async (solver) => {
         const query = new URLSearchParams({ solver, dryRun: 'true' })
         if (args.includeRemnants) query.set('includeRemnants', 'true')
+        if (args.rulesProfileId) query.set('rulesProfileId', args.rulesProfileId)
         const response = await api.post<OptimizeResponse>(
           `/api/v1/optimize?${query.toString()}`,
-          problem,
+          payload,
         )
         return { solver, result: response.result } satisfies ComparisonEntry
       }),
@@ -301,12 +317,11 @@ export const startAsyncJob = createAsyncThunk(
     const query = new URLSearchParams()
     if (args?.solver && args.solver !== 'auto') query.set('solver', args.solver)
     if (args?.includeRemnants) query.set('includeRemnants', 'true')
+    if (args?.rulesProfileId) query.set('rulesProfileId', args.rulesProfileId)
     const suffix = query.size > 0 ? `?${query.toString()}` : ''
 
-    const submit = await api.post<JobSubmitResponse>(
-      `/api/v1/jobs${suffix}`,
-      demoProblemFor(profile, cutMode),
-    )
+    const payload = demoPayload(profile, cutMode, args)
+    const submit = await api.post<JobSubmitResponse>(`/api/v1/jobs${suffix}`, payload)
     dispatch(jobStarted({ jobId: submit.id }))
 
     const view = await new Promise<JobView>((resolve, reject) => {

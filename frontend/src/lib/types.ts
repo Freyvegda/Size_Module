@@ -276,6 +276,29 @@ export interface Problem {
   seed?: number
 }
 
+// ---------------------------------------------------------------- rules ---
+
+/**
+ * A named, reusable constraint and objective preset. The engine has no glass or
+ * wood code path — the differences live in these values.
+ */
+export interface RulesProfile {
+  id: string
+  code: string
+  name: string
+  rules: Rules
+  objective: Objective
+  isDefault: boolean
+}
+
+export interface SaveRulesProfileInput {
+  code: string
+  name: string
+  rules: Rules
+  objective: Objective
+  isDefault: boolean
+}
+
 // ---------------------------------------------------------------- catalog ---
 
 export interface Material {

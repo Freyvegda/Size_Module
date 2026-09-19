@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ListPlus, Play, Scale } from 'lucide-react'
 
@@ -30,7 +30,9 @@ import {
   startAsyncJob,
 } from '@/features/optimizer/optimizerSlice'
 import { SolverBadges } from '@/features/optimizer/SolverBadges'
+import { fetchRulesProfiles } from '@/features/rules/rulesSlice'
 import { percent } from '@/lib/format'
+import { rulesOverrideFor } from '@/lib/rules'
 import { solversFor } from '@/lib/solvers'
 import type { CutMode, DimensionProfile } from '@/lib/types'
 
@@ -60,9 +62,19 @@ export function JobsPage() {
   const [cutMode, setCutMode] = useState<CutMode>('guillotine')
   const [solverChoice, setSolverChoice] = useState('auto')
   const [includeRemnants, setIncludeRemnants] = useState(true)
+  const [rulesProfileChoice, setRulesProfileChoice] = useState('default')
+  const rulesProfiles = useAppSelector((state) => state.rules.profiles)
+
+  useEffect(() => {
+    void dispatch(fetchRulesProfiles())
+  }, [dispatch])
 
   // Bars are always guillotine-cut; free cutting only exists for 2D machines.
   const effectiveCutMode: CutMode = profile === '1d' ? 'guillotine' : cutMode
+  const selectedRulesProfile = rulesProfiles.find((item) => item.id === rulesProfileChoice)
+  // The server resolves a named profile; only an actual override (free cutting,
+  // or a profile whose cut mode differs) needs the complete rules on the body.
+  const rulesOverride = rulesOverrideFor(selectedRulesProfile?.rules, effectiveCutMode)
   const compatible = useMemo(
     () => solversFor(solvers, profile, effectiveCutMode),
     [solvers, profile, effectiveCutMode],
@@ -85,6 +97,8 @@ export function JobsPage() {
         cutMode: effectiveCutMode,
         solver: selected?.name,
         includeRemnants,
+        rulesProfileId: selectedRulesProfile?.id,
+        rulesOverride,
       }),
     )
   }
@@ -96,6 +110,8 @@ export function JobsPage() {
         cutMode: effectiveCutMode,
         solvers: compatible.map((item) => item.name),
         includeRemnants,
+        rulesProfileId: selectedRulesProfile?.id,
+        rulesOverride,
       }),
     )
   }
@@ -106,7 +122,14 @@ export function JobsPage() {
 
   const queueJob = () => {
     void dispatch(
-      startAsyncJob({ profile, cutMode: effectiveCutMode, solver: selected?.name, includeRemnants }),
+      startAsyncJob({
+        profile,
+        cutMode: effectiveCutMode,
+        solver: selected?.name,
+        includeRemnants,
+        rulesProfileId: selectedRulesProfile?.id,
+        rulesOverride,
+      }),
     )
   }
 
@@ -156,6 +179,20 @@ export function JobsPage() {
                   </SelectContent>
                 </Select>
               )}
+              <Select value={rulesProfileChoice} onValueChange={setRulesProfileChoice}>
+                <SelectTrigger className="w-[220px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">Built-in rules</SelectItem>
+                  {rulesProfiles.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.name || item.code}
+                      {item.isDefault ? ' (default)' : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Select value={solver} onValueChange={setSolverChoice}>
                 <SelectTrigger className="w-[230px]">
                   <SelectValue placeholder="Auto" />

@@ -9,6 +9,7 @@ import {
   Layers,
   Play,
   Settings,
+  SlidersHorizontal,
   SquareStack,
   Wrench,
 } from 'lucide-react'
@@ -29,6 +30,7 @@ const navigation = [
   { to: '/stock', label: 'Stock', icon: Boxes },
   { to: '/jobs', label: 'Jobs', icon: Play },
   { to: '/campaigns', label: 'Campaigns', icon: CalendarRange },
+  { to: '/rules', label: 'Rules', icon: SlidersHorizontal },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 

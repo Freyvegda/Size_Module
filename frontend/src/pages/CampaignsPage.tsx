@@ -13,6 +13,13 @@ import {
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import {
   Table,
@@ -28,6 +35,7 @@ import {
   createCampaign,
   fetchCampaigns,
 } from '@/features/campaigns/campaignSlice'
+import { fetchRulesProfiles } from '@/features/rules/rulesSlice'
 import type { CampaignStatus, StockItem } from '@/lib/types'
 
 const statusVariant: Record<CampaignStatus, 'default' | 'secondary' | 'outline' | 'destructive'> = {
@@ -44,16 +52,21 @@ export function CampaignsPage() {
     (state) => state.campaigns,
   )
   const formats = useAppSelector((state) => state.catalog.stockFormats)
+  const rulesProfiles = useAppSelector((state) => state.rules.profiles)
 
   const [name, setName] = useState('')
   const [budgetMs, setBudgetMs] = useState('5000')
   const [useRemnants, setUseRemnants] = useState(true)
+  const [rulesProfileChoice, setRulesProfileChoice] = useState('default')
   const [quantities, setQuantities] = useState<Record<string, string>>({})
 
   useEffect(() => {
     void dispatch(fetchCampaigns())
     void dispatch(fetchStockFormats())
+    void dispatch(fetchRulesProfiles())
   }, [dispatch])
+
+  const selectedRulesProfile = rulesProfiles.find((item) => item.id === rulesProfileChoice)
 
   const stock = useMemo<StockItem[]>(() => {
     const out: StockItem[] = []
@@ -82,6 +95,8 @@ export function CampaignsPage() {
         budgetMs: Number(budgetMs) || 5000,
         useRemnants,
         stock,
+        rules: selectedRulesProfile?.rules,
+        objective: selectedRulesProfile?.objective,
       }),
     )
     if (createCampaign.fulfilled.match(action)) {
@@ -190,6 +205,26 @@ export function CampaignsPage() {
                 value={budgetMs}
                 onChange={(event) => setBudgetMs(event.target.value)}
               />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Rules profile</Label>
+              <Select value={rulesProfileChoice} onValueChange={setRulesProfileChoice}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">Built-in rules</SelectItem>
+                  {rulesProfiles.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.name || item.code}
+                      {item.isDefault ? ' (default)' : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Copies the profile's constraints and objective onto the campaign budget.
+              </p>
             </div>
             <div className="flex items-center justify-between rounded-md border border-border p-3">
               <div>

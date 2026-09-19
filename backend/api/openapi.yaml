@@ -93,6 +93,13 @@ paths:
           name: materialSpecId
           schema: { type: string, format: uuid }
           description: With includeRemnants, only offer remnants of this material spec
+        - in: query
+          name: rulesProfileId
+          schema: { type: string, format: uuid }
+          description: |
+            Resolve a stored rules profile into the problem's rules and objective.
+            Rules explicitly present in the body win, so a caller can still
+            override a single field on top of a preset.
       requestBody:
         required: true
         content:
@@ -137,6 +144,13 @@ paths:
           name: materialSpecId
           schema: { type: string, format: uuid }
           description: With includeRemnants, only offer remnants of this material spec
+        - in: query
+          name: rulesProfileId
+          schema: { type: string, format: uuid }
+          description: |
+            Resolve a stored rules profile into the problem's rules and objective.
+            Rules explicitly present in the body win, so a caller can still
+            override a single field on top of a preset.
       requestBody:
         required: true
         content:
