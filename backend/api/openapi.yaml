@@ -1,0 +1,1008 @@
+openapi: 3.1.0
+info:
+  title: Size Module API
+  version: 0.1.0
+  description: |
+    Material optimization API. All lengths are integer **micrometers** (1 mm =
+    1000 µm); areas are square meters; percentages are 0..100.
+
+    The API runs without PostgreSQL: `/optimize` and the demo endpoints only
+    need the in-process solver. Master data and job archiving need the database.
+servers:
+  - url: http://localhost:8080
+    description: Local development (vite proxies /api here)
+
+tags:
+  - name: system
+  - name: optimize
+  - name: catalog
+  - name: stock
+  - name: plans
+
+paths:
+  /healthz:
+    get:
+      tags: [system]
+      summary: Liveness and database status
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+        "503":
+          description: Service is up but the database is unreachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+  /api/v1/meta:
+    get:
+      tags: [system]
+      summary: Service metadata and registered solvers
+      responses:
+        "200":
+          description: Metadata
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Meta" }
+
+  /api/v1/solvers:
+    get:
+      tags: [optimize]
+      summary: List solvers and their capabilities
+      responses:
+        "200":
+          description: Solver list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [solvers]
+                properties:
+                  solvers:
+                    type: array
+                    items: { $ref: "#/components/schemas/SolverInfo" }
+
+  /api/v1/optimize:
+    post:
+      tags: [optimize]
+      summary: Run an optimization
+      description: |
+        Synchronous for now. When a database is configured the run is archived
+        as a `cut_jobs` row plus a plan, its sheets and placements, all in one
+        transaction; the returned `id` is the job id.
+      parameters:
+        - in: query
+          name: solver
+          schema: { type: string }
+          description: Force a solver by name (default picks one by dimension profile)
+        - in: query
+          name: dryRun
+          schema: { type: boolean }
+          description: When true the run is not archived as a job/plan (used for solver comparison)
+        - in: query
+          name: includeRemnants
+          schema: { type: boolean, default: false }
+          description: |
+            Append the available labelled remnants of the plant to the stock
+            list before solving (remnant-first allocation). Remnants that do not
+            match the problem's dimension profile are ignored.
+        - in: query
+          name: materialSpecId
+          schema: { type: string, format: uuid }
+          description: With includeRemnants, only offer remnants of this material spec
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Problem" }
+      responses:
+        "200":
+          description: The best plan found within the budget
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OptimizeResponse" }
+        "400":
+          description: Malformed body
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "422":
+          description: Optimization could not run (unknown solver, invalid problem)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/jobs:
+    post:
+      tags: [optimize]
+      summary: Queue an optimization job (asynchronous)
+      description: |
+        Stores the problem snapshot in the queue and returns immediately. A
+        worker claims the job with `FOR UPDATE SKIP LOCKED`, runs the solver and
+        archives the plan. Progress is streamed from
+        `GET /api/v1/jobs/{id}/events`.
+      parameters:
+        - in: query
+          name: solver
+          schema: { type: string }
+          description: Force a solver by name (default picks one by dimension profile)
+        - in: query
+          name: includeRemnants
+          schema: { type: boolean, default: false }
+          description: Append the plant's available labelled remnants to the problem snapshot before queueing
+        - in: query
+          name: materialSpecId
+          schema: { type: string, format: uuid }
+          description: With includeRemnants, only offer remnants of this material spec
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Problem" }
+      responses:
+        "202":
+          description: Job queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobSubmitResponse" }
+        "400":
+          description: Malformed body
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "503":
+          description: No database is configured, so there is no queue
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/jobs/{id}:
+    get:
+      tags: [optimize]
+      summary: Status of one job, with its plan when finished
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Job view
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobView" }
+        "404":
+          description: Unknown job id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/jobs/{id}/cancel:
+    post:
+      tags: [optimize]
+      summary: Cancel a queued or running job
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Whether the job was cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cancelled]
+                properties:
+                  cancelled: { type: boolean }
+
+  /api/v1/jobs/{id}/events:
+    get:
+      tags: [optimize]
+      summary: Server-Sent Events stream of job progress
+      description: |
+        Opens with a `snapshot` event, then streams `running`, `progress`,
+        `done`, `failed` or `cancelled`. Heartbeats are sent as SSE comments
+        every 15 seconds. Each message is `data: {"type": ..., "jobId": ...,
+        "data": ...}`.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Newline-delimited SSE frames; each `data:` line is a JSON JobEvent
+        "404":
+          description: Unknown job id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/demo/plan:
+    get:
+      tags: [optimize]
+      summary: Solve the built-in 2D demo problem (glass sheets)
+      responses:
+        "200":
+          description: Demo result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OptimizeResponse" }
+
+  /api/v1/demo/bar-plan:
+    get:
+      tags: [optimize]
+      summary: Solve the built-in 1D demo problem (aluminium bars)
+      responses:
+        "200":
+          description: Demo result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OptimizeResponse" }
+
+  /api/v1/materials:
+    get:
+      tags: [catalog]
+      summary: List active materials
+      responses:
+        "200":
+          description: Materials
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [materials]
+                properties:
+                  materials:
+                    type: array
+                    items: { $ref: "#/components/schemas/Material" }
+        "503":
+          description: Database not configured or unreachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    post:
+      tags: [catalog]
+      summary: Create a material
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateMaterialInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Material" }
+        "409":
+          description: Duplicate code or invalid input
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/stock-formats:
+    get:
+      tags: [catalog]
+      summary: List stock formats with material and spec context
+      responses:
+        "200":
+          description: Stock formats
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stockFormats]
+                properties:
+                  stockFormats:
+                    type: array
+                    items: { $ref: "#/components/schemas/StockFormat" }
+        "503":
+          description: Database not configured or unreachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/parts:
+    get:
+      tags: [catalog]
+      summary: List parts
+      responses:
+        "200":
+          description: Parts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [parts]
+                properties:
+                  parts:
+                    type: array
+                    items: { $ref: "#/components/schemas/CatalogPart" }
+        "503":
+          description: Database not configured or unreachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    post:
+      tags: [catalog]
+      summary: Create a part
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreatePartInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogPart" }
+        "409":
+          description: Duplicate code or invalid input
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/stock-items:
+    get:
+      tags: [stock]
+      summary: List physical stock pieces (full pieces and labelled remnants)
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [available, reserved, consumed, retired] }
+        - in: query
+          name: isRemnant
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Physical pieces
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stockItems]
+                properties:
+                  stockItems:
+                    type: array
+                    items: { $ref: "#/components/schemas/StockPiece" }
+        "503":
+          description: Database not configured or unreachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    post:
+      tags: [stock]
+      summary: Register a physical piece (e.g. a manually measured remnant)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateStockPieceInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StockPiece" }
+        "400":
+          description: Missing label or dimensions
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "409":
+          description: Duplicate label
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/stock-items/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [stock]
+      summary: One physical piece
+      responses:
+        "200":
+          description: The piece
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StockPiece" }
+        "404":
+          description: Unknown id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    patch:
+      tags: [stock]
+      summary: Update label, location or pool status of a piece
+      description: Consumed is set by accepting a plan; it cannot be set here.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateStockPieceInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StockPiece" }
+        "400":
+          description: Invalid status or empty label
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: Unknown id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/plans:
+    get:
+      tags: [plans]
+      summary: List archived plans, newest first
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, minimum: 1, maximum: 500 }
+        - in: query
+          name: offset
+          schema: { type: integer, default: 0, minimum: 0 }
+      responses:
+        "200":
+          description: Plans
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [plans]
+                properties:
+                  plans:
+                    type: array
+                    items: { $ref: "#/components/schemas/PlanSummary" }
+        "503":
+          description: Database not configured or unreachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/plans/{id}:
+    get:
+      tags: [plans]
+      summary: One plan with its full layout
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Plan with a result shaped like the optimizer's response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanDetail" }
+        "404":
+          description: Unknown plan id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/plans/{id}/accept:
+    post:
+      tags: [plans]
+      summary: Accept a plan and apply it to the shop
+      description: |
+        Freezes the plan and, in one transaction: consumes the physical pieces
+        it used, decrements catalog on-hand quantities, registers every reusable
+        offcut as a labelled remnant in the stock pool and writes an audit
+        entry. Accepting twice is rejected with `409`.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: What acceptance changed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AcceptPlanResponse" }
+        "404":
+          description: Unknown plan id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "409":
+          description: The plan was already accepted or archived
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+components:
+  schemas:
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, examples: [invalid_body] }
+            message: { type: string }
+
+    Health:
+      type: object
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        db: { type: string, enum: [up, down, not_configured] }
+        version: { type: string }
+        env: { type: string }
+        time: { type: string, format: date-time }
+
+    SolverCapabilities:
+      type: object
+      properties:
+        Dimension: { type: string, enum: [1d, 2d, 3d] }
+        CutMode: { type: string, enum: [guillotine, free] }
+        Rotation: { type: boolean }
+        Grain: { type: boolean }
+        Remnants: { type: boolean }
+        MaxParts: { type: integer }
+        Rank:
+          type: integer
+          description: Lower rank wins when the caller does not name a solver; 0 means unranked.
+        Description: { type: string }
+
+    SolverInfo:
+      type: object
+      required: [name, version, capabilities]
+      properties:
+        name: { type: string }
+        version: { type: string }
+        capabilities: { $ref: "#/components/schemas/SolverCapabilities" }
+
+    Meta:
+      type: object
+      properties:
+        name: { type: string }
+        version: { type: string }
+        env: { type: string }
+        solvers:
+          type: array
+          items: { $ref: "#/components/schemas/SolverInfo" }
+
+    Rect:
+      type: object
+      required: [x, y, w, h]
+      properties:
+        x: { type: integer, description: micrometers }
+        y: { type: integer, description: micrometers }
+        w: { type: integer, description: micrometers }
+        h: { type: integer, description: micrometers }
+
+    Part:
+      type: object
+      required: [id, code]
+      properties:
+        id: { type: string }
+        code: { type: string }
+        materialSpecId: { type: string }
+        length: { type: integer, description: "1d cut length in µm" }
+        width: { type: integer, description: "2d cut width in µm" }
+        height: { type: integer, description: "2d cut height in µm" }
+        quantity: { type: integer, minimum: 1, default: 1 }
+        grain: { type: string, enum: [none, along_x, along_y], default: none }
+        allowRotate: { type: boolean, default: false }
+        priority: { type: integer, description: "1 is the most important", default: 100 }
+        group: { type: string }
+
+    StockItem:
+      type: object
+      required: [id, code]
+      properties:
+        id: { type: string }
+        formatId: { type: string }
+        code: { type: string }
+        label: { type: string }
+        length: { type: integer, description: "1d stock length in µm" }
+        width: { type: integer }
+        height: { type: integer }
+        quantity: { type: integer, minimum: 1, default: 1 }
+        costPerUnit: { type: number }
+        isRemnant: { type: boolean }
+        defects:
+          type: array
+          items: { $ref: "#/components/schemas/Rect" }
+
+    Rules:
+      type: object
+      description: The only place vertical specifics live.
+      properties:
+        kerf: { type: integer, default: 4000 }
+        trim: { type: integer, default: 10000 }
+        allowRotate: { type: boolean, default: true }
+        grainMode: { type: string, enum: [none, along_x, along_y], default: none }
+        cutMode: { type: string, enum: [guillotine, free], default: guillotine }
+        maxCutStages: { type: integer, default: 0 }
+        offcutMinW: { type: integer, default: 300000 }
+        offcutMinH: { type: integer, default: 300000 }
+        offcutMinLength: { type: integer, default: 300000 }
+        minPartDim: { type: integer, default: 0 }
+        maxPartsPerSheet: { type: integer, default: 0 }
+        oversAllowedPct: { type: number, default: 0 }
+        preferRemnants:
+          type: boolean
+          default: true
+          description: |
+            Offer physical remnants to the solver before fresh catalog stock.
+            Remnant sheets are not charged against the sheet objective.
+
+    Weights:
+      type: object
+      properties:
+        fillPriority: { type: number }
+        minSheets: { type: number }
+        minScrap: { type: number }
+        minPatterns: { type: number }
+        minOffcutArea: { type: number }
+        cost: { type: number }
+
+    Objective:
+      type: object
+      properties:
+        weights: { $ref: "#/components/schemas/Weights" }
+        priorities:
+          type: array
+          items: { type: string }
+
+    Problem:
+      type: object
+      required: [parts, stocks]
+      properties:
+        parts:
+          type: array
+          items: { $ref: "#/components/schemas/Part" }
+        stocks:
+          type: array
+          items: { $ref: "#/components/schemas/StockItem" }
+        rules: { $ref: "#/components/schemas/Rules" }
+        objective: { $ref: "#/components/schemas/Objective" }
+        budgetMs: { type: integer, default: 5000 }
+        seed: { type: integer, format: int64 }
+
+    Placement:
+      type: object
+      required: [partId, partCode, x, y, w, h, rotated]
+      properties:
+        partId: { type: string }
+        partCode: { type: string }
+        x: { type: integer }
+        y: { type: integer }
+        w: { type: integer }
+        h: { type: integer }
+        rotated: { type: boolean }
+        priority: { type: integer }
+
+    SheetPlan:
+      type: object
+      properties:
+        index: { type: integer }
+        stockId: { type: string }
+        stockCode: { type: string }
+        label: { type: string }
+        width: { type: integer }
+        height: { type: integer }
+        placements:
+          type: array
+          items: { $ref: "#/components/schemas/Placement" }
+        offcuts:
+          type: array
+          items: { $ref: "#/components/schemas/Rect" }
+        cutSteps:
+          type: array
+          items: { type: string }
+
+    UnplacedPart:
+      type: object
+      properties:
+        partId: { type: string }
+        partCode: { type: string }
+        quantity: { type: integer }
+        reason: { type: string }
+
+    Metrics:
+      type: object
+      properties:
+        sheetCount: { type: integer }
+        partsPlaced: { type: integer }
+        partsRequested: { type: integer }
+        stockAreaM2: { type: number }
+        partAreaM2: { type: number }
+        kerfAreaM2: { type: number }
+        trimAreaM2: { type: number }
+        scrapAreaM2: { type: number }
+        offcutAreaM2: { type: number }
+        yieldPct: { type: number }
+        wastePct: { type: number }
+        patternCount: { type: integer }
+        cost: { type: number }
+        remnantSheets:
+          type: integer
+          description: Sheets cut from physical remnants; not charged as fresh stock
+        stockLengthM: { type: number }
+        usedLengthM: { type: number }
+        elapsedMs: { type: integer }
+
+    Solution:
+      type: object
+      properties:
+        solver: { type: string }
+        solverVersion: { type: string }
+        seed: { type: integer, format: int64 }
+        sheets:
+          type: array
+          items: { $ref: "#/components/schemas/SheetPlan" }
+        unplaced:
+          type: array
+          items: { $ref: "#/components/schemas/UnplacedPart" }
+        metrics: { $ref: "#/components/schemas/Metrics" }
+        notes:
+          type: array
+          items: { type: string }
+
+    Violation:
+      type: object
+      properties:
+        severity: { type: string, enum: [error, warning] }
+        code: { type: string }
+        sheetIndex: { type: integer }
+        partCode: { type: string }
+        message: { type: string }
+
+    OptimizeResult:
+      type: object
+      properties:
+        solution: { $ref: "#/components/schemas/Solution" }
+        violations:
+          type: array
+          items: { $ref: "#/components/schemas/Violation" }
+        score: { type: number }
+
+    OptimizeResponse:
+      type: object
+      required: [result]
+      properties:
+        id:
+          type: string
+          description: Job id, present when the run was archived in the database
+        planId:
+          type: string
+          format: uuid
+          description: Plan id, present when the run was archived in the database
+        result: { $ref: "#/components/schemas/OptimizeResult" }
+
+    JobSubmitResponse:
+      type: object
+      required: [id, status]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [queued] }
+
+    JobView:
+      type: object
+      required: [id, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [queued, running, done, failed, cancelled] }
+        solver: { type: string }
+        error: { type: string }
+        createdAt: { type: string, format: date-time }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+        planId: { type: string, format: uuid }
+        metrics: { $ref: "#/components/schemas/Metrics" }
+        result:
+          type: object
+          description: The archived OptimizeResult, present when the job is done
+          additionalProperties: true
+
+    JobEvent:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [snapshot, running, progress, done, failed, cancelled] }
+        jobId: { type: string }
+        seq: { type: integer, description: Monotonic progress counter }
+        data:
+          type: object
+          description: |
+            Terminal events carry the plan id and metrics; progress events carry
+            sheets, placed, requested, yieldPct, wastePct and elapsedMs; failed
+            events carry an error message; snapshot events carry a JobView.
+          additionalProperties: true
+
+    Material:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        dimensionProfile: { type: string, enum: [1d, 2d, 3d] }
+        isActive: { type: boolean }
+
+    CreateMaterialInput:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        dimensionProfile: { type: string, enum: [1d, 2d, 3d], default: 2d }
+        attributes: { type: object, additionalProperties: true }
+
+    StockFormat:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        materialCode: { type: string }
+        materialName: { type: string }
+        specCode: { type: string }
+        dimensionProfile: { type: string, enum: [1d, 2d, 3d] }
+        thicknessMicron: { type: integer }
+        lengthMicron: { type: integer }
+        widthMicron: { type: integer }
+        heightMicron: { type: integer }
+        onHandQty: { type: integer }
+        costPerUnit: { type: number }
+
+    CatalogPart:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        materialSpecId: { type: string, format: uuid }
+        finishedLengthMicron: { type: integer }
+        finishedWidthMicron: { type: integer }
+        finishedHeightMicron: { type: integer }
+        grain: { type: string, enum: [none, along_x, along_y] }
+        allowRotate: { type: boolean }
+        priority: { type: integer }
+
+    CreatePartInput:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        materialSpecId: { type: string, format: uuid }
+        finishedLengthMicron: { type: integer }
+        finishedWidthMicron: { type: integer }
+        finishedHeightMicron: { type: integer }
+        grain: { type: string, enum: [none, along_x, along_y] }
+        allowRotate: { type: boolean }
+        priority: { type: integer }
+
+    StockPiece:
+      type: object
+      description: |
+        One physical piece of material. A stock_format is a catalog size; this
+        is a real sheet, bar or labelled offcut that can be consumed once.
+      required: [id, code, label, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        formatId: { type: string, format: uuid }
+        formatCode: { type: string }
+        code: { type: string }
+        label: { type: string, description: Shop-floor identifier, e.g. OFF-1A2B3C4D-01-2 }
+        materialCode: { type: string }
+        specCode: { type: string }
+        dimensionProfile: { type: string, enum: [1d, 2d, 3d] }
+        lengthMicron: { type: integer }
+        widthMicron: { type: integer }
+        heightMicron: { type: integer }
+        isRemnant: { type: boolean }
+        status: { type: string, enum: [available, reserved, consumed, retired] }
+        location: { type: string }
+        costPerUnit: { type: number, description: Cost basis of the piece (prorated for remnants) }
+        notes: { type: string }
+        parentPlanId: { type: string, format: uuid, description: Plan that produced this remnant }
+        parentSheetIndex: { type: integer }
+        consumedByPlanId: { type: string, format: uuid }
+        consumedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+
+    CreateStockPieceInput:
+      type: object
+      required: [label]
+      properties:
+        formatId: { type: string, format: uuid, description: Inherit code, dimensions and cost from this format when omitted }
+        code: { type: string }
+        label: { type: string }
+        lengthMicron: { type: integer }
+        widthMicron: { type: integer }
+        heightMicron: { type: integer }
+        isRemnant: { type: boolean, default: false }
+        location: { type: string }
+        costPerUnit: { type: number }
+        notes: { type: string }
+
+    UpdateStockPieceInput:
+      type: object
+      properties:
+        label: { type: string }
+        location: { type: string }
+        status: { type: string, enum: [available, reserved, retired] }
+        notes: { type: string }
+
+    RemnantRef:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string }
+        lengthMicron: { type: integer }
+        widthMicron: { type: integer }
+        heightMicron: { type: integer }
+
+    PlanSummary:
+      type: object
+      required: [id, status, version]
+      properties:
+        id: { type: string, format: uuid }
+        jobId: { type: string, format: uuid }
+        status: { type: string, enum: [draft, approved, accepted, archived] }
+        version: { type: integer }
+        name: { type: string }
+        solver: { type: string }
+        solverVersion: { type: string }
+        seed: { type: integer, format: int64 }
+        metrics: { $ref: "#/components/schemas/Metrics" }
+        createdAt: { type: string, format: date-time }
+        acceptedAt: { type: string, format: date-time }
+
+    PlanDetail:
+      allOf:
+        - $ref: "#/components/schemas/PlanSummary"
+        - type: object
+          required: [result]
+          properties:
+            result:
+              $ref: "#/components/schemas/OptimizeResult"
+              description: The archived result, or a reconstruction when no result JSON was stored
+
+    AcceptPlanResponse:
+      type: object
+      required: [planId, status, sheets]
+      properties:
+        planId: { type: string, format: uuid }
+        status: { type: string, enum: [accepted] }
+        sheets: { type: integer, description: Sheets in the plan }
+        remnantsCreated:
+          type: array
+          items: { $ref: "#/components/schemas/RemnantRef" }
+        stockConsumed:
+          type: array
+          items: { type: string }
+          description: Labels of physical pieces that were used up
+        formatDecrements:
+          type: integer
+          description: Sheets taken from catalog on-hand quantities
+        formatShortages:
+          type: integer
+          description: Sheets whose format had no on-hand stock left to decrement

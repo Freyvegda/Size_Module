@@ -1,0 +1,24 @@
+{
+  "name": "bars-varied",
+  "rules": {
+    "kerf": 3000,
+    "trim": 5000,
+    "allowRotate": false,
+    "grainMode": "none",
+    "cutMode": "guillotine",
+    "offcutMinLength": 300000,
+    "minPartDim": 0,
+    "oversAllowedPct": 0
+  },
+  "stocks": [
+    { "id": "bar-6000", "code": "BAR-6000", "length": 6000000, "width": 60000, "quantity": 40, "costPerUnit": 14.75 }
+  ],
+  "parts": [
+    { "id": "a", "code": "PROFILE-2400", "length": 2400000, "quantity": 12, "priority": 1 },
+    { "id": "b", "code": "PROFILE-1750", "length": 1750000, "quantity": 18, "priority": 1 },
+    { "id": "c", "code": "PROFILE-1200", "length": 1200000, "quantity": 24, "priority": 2 },
+    { "id": "d", "code": "PROFILE-830", "length": 830000, "quantity": 30, "priority": 2 },
+    { "id": "e", "code": "PROFILE-620", "length": 620000, "quantity": 36, "priority": 3 },
+    { "id": "f", "code": "PROFILE-410", "length": 410000, "quantity": 45, "priority": 3 }
+  ]
+}

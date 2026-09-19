@@ -1,0 +1,19 @@
+{
+  "name": "bars-homogeneous",
+  "rules": {
+    "kerf": 3000,
+    "trim": 5000,
+    "allowRotate": false,
+    "grainMode": "none",
+    "cutMode": "guillotine",
+    "offcutMinLength": 300000,
+    "minPartDim": 0,
+    "oversAllowedPct": 0
+  },
+  "stocks": [
+    { "id": "bar-6000", "code": "BAR-6000", "length": 6000000, "width": 60000, "quantity": 60, "costPerUnit": 14.75 }
+  ],
+  "parts": [
+    { "id": "rail", "code": "RAIL-1400", "length": 1400000, "quantity": 200, "priority": 1 }
+  ]
+}

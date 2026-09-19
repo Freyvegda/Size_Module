@@ -1,0 +1,183 @@
+# Size Module
+
+A material optimization platform: it decides how to divide stock material into
+products with the least waste, and it keeps the leftovers in circulation.
+
+The first vertical slice is a **cut optimizer**: give it an order (parts) and
+stock (sheets, panels, bars) and it returns a validated cutting plan with 2D and
+3D visualisations, a waste breakdown and shop-floor cut steps.
+
+```
+frontend/   React 19 + TypeScript + Tailwind/shadcn + Redux Toolkit + three.js
+backend/    Go: HTTP API + optimizer engine (pure Go, unit tested)
+db/         PostgreSQL schema, sqlc queries, seeds, table tests, scripts
+deploy/     docker-compose for local infrastructure
+docs/       Domain glossary and notes
+```
+
+## What works today
+
+| Piece | Status |
+|---|---|
+| 2D beam search solver (`beam-2d`) | explores guillotine cut trees; 26.8% mean waste vs 35.0% for the shelf baseline on the benchmark set |
+| Local search solver (`polish-2d`) | dissolves, merges and repacks sheets within the time budget; 24.5% mean waste, 9→7 and 7→6 sheets on two hard instances |
+| 2D shelf solver (`shelf-2d`) | fast baseline: strips, kerf/trim/grain/rotation, reusable offcuts, cut sequences |
+| Column generation solver (`cg-1d`) | Gilmore–Gomory with DP pricing and an LP lower bound; 26 bars vs 28 for the baseline on `bars-varied` (optimal), 41/50 vs 36/50 pieces when stock is short |
+| Two-stage column generation (`cg-2d`) | strip + height pricing for guillotine sheets; 26.3% mean waste vs 29.2% for the beam, at ~2 ms per instance, and it minimises stock **cost** |
+| Free-cutting solver (`maxrects-2d`) | MaxRects for `cutMode: free` (CNC, laser, waterjet); ties on sheet count but leaves more fragmented remnants — measured, not assumed |
+| 1D First-Fit-Decreasing solver (`ffd-1d`) | fast baseline for bars, profiles and tubes with offcuts |
+| Portfolios (`best-1d`, `best-2d`) | run every strategy for the dimension and cut mode within the budget, keep the best objective score |
+| Guillotine cut-tree validator | proves a layout can actually be cut; rejects pinwheel layouts |
+| Plan validator | overlaps, bounds, kerf, grain, demand limits, guillotine feasibility |
+| Explainer | waste breakdown (trim/kerf/scrap/offcut), area lower bound, notes |
+| Benchmark harness | committed + generated instances, golden regression gate, `go test` enforcement |
+| REST API | health, meta, solvers, optimize (`solver=`, `dryRun=`), demo plans, materials, stock formats, parts |
+| Async job queue | `POST /api/v1/jobs` → Postgres queue (`FOR UPDATE SKIP LOCKED`), worker pool, `GET /jobs/{id}`, cancel, **SSE progress** with best-so-far plans |
+| Physical stock pool | `stock_items` distinguishes catalog sizes from pieces; `/api/v1/stock-items` registers labelled remnants, retires them, and keeps lineage to the plan that produced them |
+| Remnant-first allocation | `?includeRemnants=1` loads available labelled remnants into the problem; constructive solvers use them before fresh sheets and the objective does not charge remnant sheets as new stock |
+| Plan acceptance | `POST /api/v1/plans/{id}/accept` consumes pieces, decrements on-hand quantities, registers labelled offcut remnants and writes an audit entry in one transaction |
+| Archived plan API | `GET /api/v1/plans` and `GET /api/v1/plans/{id}` return a stored plan in the same shape as a fresh solve (archived result JSON, re-validated reconstruction as fallback) |
+| PostgreSQL schema + seeds | materials, specs, stock formats, parts, routings, jobs, plans, placements, audit |
+| Job archive | every non-dry `POST /optimize` persists job + plan + sheets + placements in one transaction |
+| Web app | dashboard, plan viewer (2D orthographic / 3D exploded with three.js, 1D bar tracks), solver picker + comparison, materials, parts, stock, jobs (sync run + async queue with live progress), settings |
+
+See [`docs/solver.md`](docs/solver.md) for how the solvers work and how quality
+is gated.
+
+Not implemented yet (planned): live plan editing with locks and re-solve,
+exports (PDF/DXF/SVG/CSV), costing and KPI dashboards, authentication/roles.
+
+## Quickstart
+
+Prerequisites: Go (1.24+), Node 22+, pnpm, Docker.
+
+```powershell
+# 1. Infrastructure (PostgreSQL on host port 5433 + Adminer on 8081)
+.\db\scripts\up.ps1
+
+# 2. Schema and demo data
+.\db\scripts\migrate.ps1
+.\db\scripts\seed.ps1
+
+# 3. Verify the tables
+.\db\scripts\test.ps1
+
+# 4. API (http://localhost:8080)
+cd backend
+go run ./cmd/cutoptics
+
+# 5. Web app (http://localhost:5173) — in a second terminal
+cd frontend
+pnpm dev
+```
+
+The optimizer also runs without any infrastructure:
+
+```powershell
+cd backend
+go run ./cmd/cutoptics -demo        # 2D demo plan as JSON
+go run ./cmd/cutoptics -demo-bar    # 1D demo plan as JSON
+go test ./...                       # solver tests + benchmark golden gate
+
+# Benchmark every solver on committed + generated instances
+go run ./cmd/cutoptics bench -dir testdata/benchmarks -random 6 -check
+```
+
+## Async jobs (queue + live progress)
+
+`POST /api/v1/optimize` answers synchronously and is fine for interactive runs.
+Long jobs belong on the queue, which needs PostgreSQL:
+
+```powershell
+# Queue a job (returns 202 with the job id immediately)
+curl.exe -s -X POST "http://localhost:8080/api/v1/jobs?solver=polish-2d" `
+  -H "Content-Type: application/json" -d "@problem.json"
+
+# Watch it: snapshot, running, progress, done (or failed / cancelled)
+curl.exe -s -N "http://localhost:8080/api/v1/jobs/<id>/events"
+
+curl.exe -s "http://localhost:8080/api/v1/jobs/<id>"          # status + plan id + metrics
+curl.exe -s -X POST "http://localhost:8080/api/v1/jobs/<id>/cancel"
+```
+
+Workers run inside the API process (`CUTOPTICS_WORKERS`, default 2) and claim
+jobs with `FOR UPDATE SKIP LOCKED`, so several processes can share one database.
+Every finished job is archived as a plan with its sheets and placements; jobs
+left running by a crash are failed on the next worker start. The Jobs page in
+the web app submits to this queue and shows the live progress bar.
+
+> Port note: the compose file publishes PostgreSQL on **5433** because a native
+> PostgreSQL installation commonly owns 5432. Change `POSTGRES_PORT` in
+> `deploy/compose/.env` and `DATABASE_URL` in `db/.env` together if you want a
+> different port.
+
+## Remnants (leftovers in circulation)
+
+A **stock format** is a catalog size; a **stock item** is one physical piece. The
+stock pool is what closes the loop:
+
+```powershell
+# What is on the shelves (labelled pieces and remnants)
+curl.exe -s "http://localhost:8080/api/v1/stock-items?status=available"
+
+# Ask a run to use the pool before fresh sheets (sync or queued)
+curl.exe -s -X POST "http://localhost:8080/api/v1/optimize?includeRemnants=1" `
+  -H "Content-Type: application/json" -d "@problem.json"
+
+# Accept a plan: consume used pieces, decrement on-hand, label the offcuts
+curl.exe -s -X POST "http://localhost:8080/api/v1/plans/<plan-id>/accept"
+```
+
+Acceptance is one transaction: the plan is frozen (`accepted`), the physical
+pieces it used become `consumed`, catalog `on_hand_qty` goes down (never below
+zero), every reusable offcut is registered as a labelled remnant
+(`OFF-<plan>-<sheet>-<offcut>`, with prorated cost and lineage) and an
+`audit_log` entry is written. `metrics.remnantSheets` in any result says how many
+sheets came from leftovers instead of new stock.
+
+## The DB folder
+
+`db/` is self-contained: schema, queries and the commands to work with them.
+
+| Script | Purpose |
+|---|---|
+| `up.ps1` / `down.ps1 [-Volumes]` | start / stop PostgreSQL and Adminer |
+| `migrate.ps1 [-Status] [-Down] [-To N]` | apply goose migrations or inspect them |
+| `new-migration.ps1 -Name add_remnants` | create the next up/down migration pair |
+| `seed.ps1` | apply everything in `db/seeds` in name order |
+| `psql.ps1` / `psql.ps1 -File some.sql` | interactive shell or run a SQL file |
+| `test.ps1` | run the table tests in `db/tests` |
+| `generate.ps1` | run `sqlc generate` into `backend/internal/platform/db` |
+| `reset.ps1 [-Force]` | drop schema, migrate, seed |
+
+Adding a query: write it in `db/queries/*.sql` with a `-- name:` comment, run
+`db/scripts/generate.ps1`, and use the generated function from a module store.
+
+## Architecture in one paragraph
+
+`internal/optimizer` is a pure Go library with a single `Solver` interface
+(`core/solver.go`) and a registry. Problems and solutions are plain structs with
+**all lengths in integer micrometers**, so every layer is exact: the API, the
+database, the solvers and the tests. Modules (`catalog`, `parts`, `jobs`) depend
+on small store interfaces; `internal/platform/postgres` implements them with
+sqlc-generated queries. The API starts even when PostgreSQL is down — the
+optimizer keeps working and results simply are not archived.
+
+## Roadmap (next milestones)
+
+1. ~~Beam search over cut trees, keeping `shelf-2d` as the baseline~~ — done,
+   with a golden benchmark gate.
+2. ~~Iterated local search that uses the time budget~~ — done (`polish-2d`).
+3. ~~Column generation with DP pricing for 1D homogeneous orders~~ — done
+   (`cg-1d`, with an LP lower bound in the plan notes).
+4. ~~Column generation for 2D guillotine patterns and a free-cutting MaxRects
+   solver~~ — done (`cg-2d` two-stage pricing with demand rationing,
+   `maxrects-2d` for `cutMode: free`).
+5. ~~Async jobs: Postgres-backed queue (`FOR UPDATE SKIP LOCKED`), SSE progress
+   with best-so-far plans~~ — done (`POST /api/v1/jobs`, worker pool, SSE stream,
+   cancel, stale-job recovery; the Jobs page shows live progress).
+6. ~~Remnant lifecycle: physical sheets, offcut labels, remnant-first
+   allocation~~ — done (`stock_items`, `/api/v1/stock-items`, `preferRemnants`,
+   labelled offcuts on acceptance, audit trail).
+7. Interactive plan editing with locks and re-solve; exports (PDF/DXF/CSV/SVG).
+8. Costing, realized-yield KPIs, campaign planning.

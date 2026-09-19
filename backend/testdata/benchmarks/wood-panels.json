@@ -1,0 +1,24 @@
+{
+  "name": "wood-panels",
+  "rules": {
+    "kerf": 3300,
+    "trim": 8000,
+    "allowRotate": true,
+    "grainMode": "none",
+    "cutMode": "guillotine",
+    "offcutMinW": 300000,
+    "offcutMinH": 200000,
+    "minPartDim": 0,
+    "oversAllowedPct": 0
+  },
+  "stocks": [
+    { "id": "board-big", "code": "BOARD-2800x2070", "width": 2800000, "height": 2070000, "quantity": 8, "costPerUnit": 41.0 },
+    { "id": "board-small", "code": "BOARD-2500x1250", "width": 2500000, "height": 1250000, "quantity": 6, "costPerUnit": 22.5 }
+  ],
+  "parts": [
+    { "id": "side", "code": "SIDE-600x2000", "width": 600000, "height": 2000000, "quantity": 8, "grain": "along_y", "allowRotate": false, "priority": 1 },
+    { "id": "shelf", "code": "SHELF-560x500", "width": 560000, "height": 500000, "quantity": 12, "grain": "along_x", "allowRotate": false, "priority": 2 },
+    { "id": "back", "code": "BACK-1200x800", "width": 1200000, "height": 800000, "quantity": 6, "allowRotate": true, "priority": 2 },
+    { "id": "drawer", "code": "DRAWER-400x300", "width": 400000, "height": 300000, "quantity": 16, "allowRotate": true, "priority": 3 }
+  ]
+}

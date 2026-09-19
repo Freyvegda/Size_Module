@@ -1,0 +1,23 @@
+{
+  "name": "glass-interlock",
+  "rules": {
+    "kerf": 4000,
+    "trim": 10000,
+    "allowRotate": false,
+    "grainMode": "none",
+    "cutMode": "free",
+    "offcutMinW": 300000,
+    "offcutMinH": 300000,
+    "minPartDim": 0,
+    "oversAllowedPct": 0
+  },
+  "stocks": [
+    { "id": "sheet", "code": "SHEET-3000x2000", "width": 3000000, "height": 2000000, "quantity": 6, "costPerUnit": 54.0 }
+  ],
+  "parts": [
+    { "id": "a", "code": "LONG-1500x600", "width": 1500000, "height": 600000, "quantity": 2, "allowRotate": false, "priority": 1 },
+    { "id": "b", "code": "TALL-600x1500", "width": 600000, "height": 1500000, "quantity": 2, "allowRotate": false, "priority": 1 },
+    { "id": "c", "code": "BAND-1000x400", "width": 1000000, "height": 400000, "quantity": 4, "allowRotate": false, "priority": 2 },
+    { "id": "d", "code": "POST-400x1000", "width": 400000, "height": 1000000, "quantity": 4, "allowRotate": false, "priority": 2 }
+  ]
+}

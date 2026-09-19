@@ -1,0 +1,25 @@
+{
+  "name": "glass-free",
+  "rules": {
+    "kerf": 4000,
+    "trim": 10000,
+    "allowRotate": true,
+    "grainMode": "none",
+    "cutMode": "free",
+    "offcutMinW": 300000,
+    "offcutMinH": 300000,
+    "minPartDim": 0,
+    "oversAllowedPct": 0
+  },
+  "stocks": [
+    { "id": "s-large", "code": "SHEET-3210x2250", "width": 3210000, "height": 2250000, "quantity": 5, "costPerUnit": 62.5 },
+    { "id": "s-small", "code": "SHEET-2440x1220", "width": 2440000, "height": 1220000, "quantity": 4, "costPerUnit": 28 }
+  ],
+  "parts": [
+    { "id": "tri", "code": "SHAPE-1370x1130", "width": 1370000, "height": 1130000, "quantity": 4, "allowRotate": true, "priority": 1 },
+    { "id": "quad", "code": "SHAPE-940x760", "width": 940000, "height": 760000, "quantity": 6, "allowRotate": true, "priority": 1 },
+    { "id": "strip", "code": "SHAPE-1880x420", "width": 1880000, "height": 420000, "quantity": 8, "allowRotate": true, "priority": 2 },
+    { "id": "small", "code": "SHAPE-620x530", "width": 620000, "height": 530000, "quantity": 10, "allowRotate": true, "priority": 2 },
+    { "id": "long", "code": "SHAPE-2010x310", "width": 2010000, "height": 310000, "quantity": 6, "allowRotate": true, "priority": 3 }
+  ]
+}

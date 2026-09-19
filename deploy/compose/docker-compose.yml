@@ -1,0 +1,41 @@
+name: size-module
+
+# Local development infrastructure only: PostgreSQL and Adminer.
+# The Go API and the React app run on the host (see README.md).
+#
+#   docker compose -f deploy/compose/docker-compose.yml up -d --wait
+#
+# Or simply use db/scripts/up.ps1
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: size-module-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cutoptics}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cutoptics}
+      POSTGRES_DB: ${POSTGRES_DB:-cutoptics}
+    ports:
+      # 5433 on the host: many developer machines already run a native
+      # PostgreSQL on 5432. Change POSTGRES_PORT in deploy/compose/.env to move
+      # it back, and keep DATABASE_URL in db/.env in sync.
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cutoptics} -d ${POSTGRES_DB:-cutoptics}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  adminer:
+    image: adminer:4
+    container_name: size-module-adminer
+    ports:
+      - "${ADMINER_PORT:-8081}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

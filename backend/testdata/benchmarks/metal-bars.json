@@ -1,0 +1,22 @@
+{
+  "name": "metal-bars",
+  "rules": {
+    "kerf": 3000,
+    "trim": 5000,
+    "allowRotate": false,
+    "grainMode": "none",
+    "cutMode": "guillotine",
+    "offcutMinLength": 300000,
+    "minPartDim": 0,
+    "oversAllowedPct": 0
+  },
+  "stocks": [
+    { "id": "bar-6000", "code": "BAR-6000", "length": 6000000, "width": 60000, "quantity": 8, "costPerUnit": 14.75 }
+  ],
+  "parts": [
+    { "id": "rail-long", "code": "RAIL-2400", "length": 2400000, "quantity": 10, "priority": 1 },
+    { "id": "rail-mid", "code": "RAIL-1100", "length": 1100000, "quantity": 14, "priority": 2 },
+    { "id": "plate", "code": "PLATE-800", "length": 800000, "quantity": 6, "priority": 2 },
+    { "id": "spacer", "code": "SPACER-450", "length": 450000, "quantity": 20, "priority": 3 }
+  ]
+}

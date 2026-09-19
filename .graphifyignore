@@ -1,0 +1,15 @@
+# Graphify scan exclusions (the graph artifacts themselves, tooling, vendors)
+
+# Python tooling venv (graphify itself lives here)
+.venv/
+
+# Frontend vendor + build output
+frontend/node_modules/
+frontend/dist/
+
+# Graph output (never extract our own graph)
+graphify-out/
+
+# Editors / OS
+.vscode/
+.idea/

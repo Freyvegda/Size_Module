@@ -1,0 +1,25 @@
+{
+  "name": "glass-mixed",
+  "rules": {
+    "kerf": 4000,
+    "trim": 10000,
+    "allowRotate": true,
+    "grainMode": "none",
+    "cutMode": "guillotine",
+    "offcutMinW": 300000,
+    "offcutMinH": 300000,
+    "minPartDim": 0,
+    "oversAllowedPct": 0
+  },
+  "stocks": [
+    { "id": "s-large", "code": "SHEET-3210x2250", "width": 3210000, "height": 2250000, "quantity": 6, "costPerUnit": 62.5 },
+    { "id": "s-small", "code": "SHEET-2440x1220", "width": 2440000, "height": 1220000, "quantity": 4, "costPerUnit": 28 }
+  ],
+  "parts": [
+    { "id": "win-a", "code": "WINDOW-1200x1400", "width": 1200000, "height": 1400000, "quantity": 6, "allowRotate": true, "priority": 1 },
+    { "id": "win-b", "code": "WINDOW-800x1000", "width": 800000, "height": 1000000, "quantity": 6, "allowRotate": true, "priority": 1 },
+    { "id": "door", "code": "DOOR-600x2000", "width": 600000, "height": 2000000, "quantity": 3, "allowRotate": true, "priority": 1 },
+    { "id": "shelf", "code": "SHELF-500x250", "width": 500000, "height": 250000, "quantity": 10, "allowRotate": true, "priority": 2 },
+    { "id": "strip", "code": "STRIP-1800x300", "width": 1800000, "height": 300000, "quantity": 8, "allowRotate": true, "priority": 2 }
+  ]
+}
