@@ -186,6 +186,11 @@ func (s *Store) ListRemnants(ctx context.Context, materialSpecID string) ([]core
 		}
 		if r.FormatID.Valid {
 			item.FormatID = uuid.UUID(r.FormatID.Bytes).String()
+			// Keep the material with the piece so campaigns can scope a
+			// budget line to the item it will plan.
+			if format, err := s.queries.GetStockFormat(ctx, r.FormatID.Bytes); err == nil {
+				item.MaterialSpecID = format.MaterialSpecID.String()
+			}
 		}
 		out = append(out, item)
 	}

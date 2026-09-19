@@ -171,6 +171,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 			httpx.Error(w, http.StatusBadRequest, "invalid_input", "component dimensions cannot be negative")
 			return
 		}
+		if c.WidthMicron == 0 && c.HeightMicron == 0 && c.DepthMicron == 0 {
+			httpx.Error(w, http.StatusBadRequest, "invalid_input", "a component needs at least one dimension")
+			return
+		}
 		if c.Quantity <= 0 {
 			c.Quantity = 1
 		}

@@ -18,7 +18,8 @@ API through `/api` and `/healthz`, which the Vite dev server proxies to
 | `src/features/kpis/` | realized-yield KPI slice (`fetchKpis`, window in days) |
 | `src/features/campaigns/` | campaign list/detail slice (create, add/remove item, run-next mutations) |
 | `src/features/catalog/` | materials, material types/brands, parts, stock-format and physical-stock slice (list + create + update thunks) |
-| `src/features/optimizer/` | 1D/2D demo problems, optimization run + solver comparison + async job queue (submit/cancel, SSE progress) slice, `SolverBadges.tsx` |
+| `src/features/optimizer/` | 1D/2D demo problems, optimization run + solver comparison + async job queue (submit/cancel, SSE progress) slice, `buildProblem.ts` (catalog parts → one problem per material/dimension, using cut sizes), `SolverBadges.tsx` |
+| `src/features/plans/` | archived plan list slice (`fetchPlans`) powering the Plans page |
 | `src/features/viewer/` | `PlanViewer.tsx` (panels + edit/export toolbar), `PlanScene.tsx` (three.js ortho 2D / perspective 3D, draggable in edit mode), `BarPlanView.tsx` (1D bars), `viewerSlice.ts`, `partColor.ts` |
 | `src/features/assemblies/` | products (assemblies) slice + preview: `assemblySlice.ts`, `geometry.ts`, `explode.ts` (components → cut parts), `templates.ts` (window/table), `AssemblyViewer.tsx` (2D/3D toggle), `AssemblyElevation.tsx` (SVG), `AssemblyScene.tsx` (lazy three.js) |
 | `src/lib/` | `api.ts` (fetch wrapper + `ApiError`), `types.ts` (hand-written TS mirrors of Go contracts), `results.ts` (nil-slice normalization), `solvers.ts` (registry-compatible solver filtering), `format.ts` (µm→mm), `samplePlan.ts` (2D + 1D fallback plans), `utils.ts` |
@@ -64,8 +65,10 @@ API through `/api` and `/healthz`, which the Vite dev server proxies to
 - **Campaigns**: `/campaigns` (list + create from catalog formats/remnants) and
   `/campaigns/:id` (budget table, ordered items, Run next, add item from catalog
   parts). Every mutation returns the full detail, which the slice stores, so
-  the budget on screen is always the server's. Opening a planned item's plan
-  uses `loadPlanDetail` from the optimizer slice.
+  the budget on screen is always the server's. Budget entries carry
+  `materialSpecId`, and the server scopes each item's stock to the item's
+  material and rejects items that mix materials or dimension profiles. Opening
+  a planned item's plan uses `loadPlanDetail` from the optimizer slice.
 - **Plan editing**: the viewer's edit mode keeps a draft copy of the sheets plus
   pending `EditOperation`s in `viewerSlice` (`beginEdit`, `movePart`,
   `rotatePart`, `toggleLockPart`, `deletePart`); `PlanScene` drags pieces in 2D
@@ -87,8 +90,17 @@ API through `/api` and `/healthz`, which the Vite dev server proxies to
   the 2D SVG elevation (`AssemblyElevation`) and lazy-loads `AssemblyScene.tsx`
   for 3D, keeping three.js out of the initial bundle. `templates.ts` provides the
   window/table generators; `explode.ts` turns components into cut parts (cut
-  face = the two largest dimensions, identical parts merged) and
-  `optimizeProblem` plans them against the type's stock, then the viewer opens.
+  face = the two largest dimensions, identical parts merged). The page groups
+  components by **material spec** (each resolved from the component or the
+  product) and plans **one problem per (material, dimension profile)** through
+  `buildProblem.ts`, so a window (glass panels + aluminium frames) becomes two
+  solvable plans instead of one mixed, impossible one.
+- **Parts → plan an order**: the Parts page lists finished and cut sizes (cut =
+  finished + routing allowances, computed server-side) and can plan selected
+  quantities against each part's material stock, with remnant-first allocation.
+  This is the catalog entry point the Jobs demo never was.
+- **Plans**: `/plans` lists every archived plan version and opens one in the
+  viewer (accept/edit/export live there).
 - **Materials & stock entry**: the Materials page creates families and their
   types (`POST /api/v1/material-specs`); the Stock page adds catalog sizes
   (`POST /api/v1/stock-formats`). Both feed the Products material pickers.

@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import {
   Boxes,
   CalendarRange,
+  ClipboardList,
   Eye,
   LayoutDashboard,
   LayoutGrid,
@@ -21,6 +22,7 @@ import { fetchBackend } from '@/features/backend/backendSlice'
 const navigation = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/viewer', label: 'Plan viewer', icon: Eye },
+  { to: '/plans', label: 'Plans', icon: ClipboardList },
   { to: '/materials', label: 'Materials', icon: Layers },
   { to: '/parts', label: 'Parts', icon: SquareStack },
   { to: '/products', label: 'Products', icon: LayoutGrid },

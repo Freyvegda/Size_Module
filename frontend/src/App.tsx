@@ -7,6 +7,7 @@ import { DashboardPage } from '@/pages/DashboardPage'
 import { JobsPage } from '@/pages/JobsPage'
 import { MaterialsPage } from '@/pages/MaterialsPage'
 import { PartsPage } from '@/pages/PartsPage'
+import { PlansPage } from '@/pages/PlansPage'
 import { PlanViewerPage } from '@/pages/PlanViewerPage'
 import { ProductsPage } from '@/pages/ProductsPage'
 import { SettingsPage } from '@/pages/SettingsPage'
@@ -18,6 +19,7 @@ export default function App() {
       <Route element={<AppShell />}>
         <Route index element={<DashboardPage />} />
         <Route path="viewer" element={<PlanViewerPage />} />
+        <Route path="plans" element={<PlansPage />} />
         <Route path="materials" element={<MaterialsPage />} />
         <Route path="parts" element={<PartsPage />} />
         <Route path="products" element={<ProductsPage />} />

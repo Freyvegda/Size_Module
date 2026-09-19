@@ -130,7 +130,10 @@ func TestBuildItemProblemNormalizes(t *testing.T) {
 		Stock:    budgetProblem(),
 	}
 	item := Item{Seq: 2, Parts: []core.Part{{ID: "p", Code: "PANE", Width: core.FromMM(500), Height: core.FromMM(500), Quantity: 1}}}
-	p := BuildItemProblem(campaign, item, 0)
+	p, err := BuildItemProblem(campaign, item, 0)
+	if err != nil {
+		t.Fatalf("build item problem: %v", err)
+	}
 	if p.Rules.Kerf != core.DefaultRules().Kerf {
 		t.Fatalf("rules were not defaulted: %+v", p.Rules)
 	}

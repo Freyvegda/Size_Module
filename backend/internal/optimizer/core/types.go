@@ -116,6 +116,10 @@ type StockItem struct {
 	FormatID    string  `json:"formatId,omitempty"`
 	Code        string  `json:"code"`
 	Label       string  `json:"label,omitempty"`
+	// MaterialSpecID is the material this piece belongs to. It is descriptive
+	// for most callers but campaigns use it to keep an item's parts out of
+	// another material's stock.
+	MaterialSpecID string `json:"materialSpecId,omitempty"`
 	Length      Dim     `json:"length,omitempty"`
 	Width       Dim     `json:"width,omitempty"`
 	Height      Dim     `json:"height,omitempty"`

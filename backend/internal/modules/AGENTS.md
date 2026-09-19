@@ -7,7 +7,7 @@ not import each other; shared helpers live in `platform/httpx`.
 | Module | Files | Responsibilities | Store interface |
 |---|---|---|---|
 | `catalog` | `store.go` | materials, material types (specs) + stock formats | `ListMaterials`, `CreateMaterial`, `ListMaterialSpecs`, `CreateMaterialSpec`, `ListStockFormats`, `CreateStockFormat` |
-| `parts` | `store.go` | part catalog (finished sizes, allowance concept) | `ListParts`, `CreatePart` |
+| `parts` | `store.go` | part catalog; finished sizes + routings → cut sizes (`CutSize`) | `ListParts`, `CreatePart` |
 | `assemblies` | `store.go` | product catalog: assemblies (overall size) + components (glass panels, frame beams) rendered in 2D/3D | `ListAssemblies`, `GetAssembly`, `CreateAssembly` |
 | `jobs` | `service.go`, `queue.go`, `worker.go`, `http.go` | solve orchestration, demo problems, run archiving, asynchronous queue + SSE progress, remnant injection | `SaveRun` (sync), `QueueStore` (async), `RemnantSource` (optional) |
 | `stock` | `store.go` | physical stock pieces: full pieces and labelled remnants | `ListItems`, `GetItem`, `CreateItem`, `UpdateItem` |
@@ -54,9 +54,10 @@ not import each other; shared helpers live in `platform/httpx`.
   `kind` is `window | door | generic` and a component kind is
   `beam | panel | custom`. The product optionally binds to a `materialSpecId`
   (the default for its components) and a component carries a `quantity`.
-- Assemblies are still not solved directly: the frontend explodes components
-  into cut parts (Products → Run cut plan) and posts that problem to
-  `/optimize`. The API only stores and serves the definition.
+- Assemblies are still stored/served here rather than solved server-side: the
+  frontend explodes components into cut parts, **splits them by (material spec,
+  dimension profile)** and posts one problem per group to `/optimize`. See
+  `frontend/src/features/optimizer/buildProblem.ts`.
 
 ## stock
 

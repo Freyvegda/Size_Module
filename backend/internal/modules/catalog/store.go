@@ -35,6 +35,7 @@ type MaterialSpec struct {
 type StockFormat struct {
 	ID               string  `json:"id"`
 	Code             string  `json:"code"`
+	MaterialSpecID   string  `json:"materialSpecId"`
 	MaterialCode     string  `json:"materialCode"`
 	MaterialName     string  `json:"materialName"`
 	SpecCode         string  `json:"specCode"`

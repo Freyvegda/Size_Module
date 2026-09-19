@@ -224,6 +224,8 @@ export interface StockItem {
   formatId?: string
   code: string
   label?: string
+  /** Material this piece belongs to; keeps a campaign budget line scoped. */
+  materialSpecId?: string
   length?: number
   width?: number
   height?: number
@@ -327,6 +329,7 @@ export interface CreateStockFormatInput {
 export interface StockFormat {
   id: string
   code: string
+  materialSpecId: string
   materialCode: string
   materialName: string
   specCode: string
@@ -339,6 +342,24 @@ export interface StockFormat {
   costPerUnit: number
 }
 
+/** One manufacturing operation; its allowance turns the finished size into the cut size. */
+export interface PartRouting {
+  seq: number
+  operation: string
+  allowanceMicron: number
+  /** When true the allowance is added on both sides of every active dimension. */
+  allowancePerEdge: boolean
+  notes?: string
+}
+
+export interface CreatePartRoutingInput {
+  seq?: number
+  operation: string
+  allowanceMicron?: number
+  allowancePerEdge?: boolean
+  notes?: string
+}
+
 export interface Part {
   id: string
   code: string
@@ -347,9 +368,14 @@ export interface Part {
   finishedLengthMicron: number
   finishedWidthMicron: number
   finishedHeightMicron: number
+  /** Finished size + routing allowances. What the solver actually cuts. */
+  cutLengthMicron: number
+  cutWidthMicron: number
+  cutHeightMicron: number
   grain: GrainMode
   allowRotate: boolean
   priority: number
+  routings: PartRouting[]
 }
 
 export interface CreatePartInput {
@@ -362,6 +388,7 @@ export interface CreatePartInput {
   grain?: GrainMode
   allowRotate?: boolean
   priority?: number
+  routings?: CreatePartRoutingInput[]
 }
 
 // --------------------------------------------------------------- assemblies ---

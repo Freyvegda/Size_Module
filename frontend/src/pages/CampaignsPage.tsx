@@ -62,7 +62,9 @@ export function CampaignsPage() {
       if (quantity <= 0) continue
       out.push({
         id: format.id,
+        formatId: format.id,
         code: format.code,
+        materialSpecId: format.materialSpecId,
         width: format.widthMicron,
         height: format.heightMicron,
         length: format.lengthMicron,

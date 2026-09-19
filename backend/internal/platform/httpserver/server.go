@@ -16,6 +16,7 @@ import (
 	"github.com/size-module/backend/internal/modules/kpis"
 	"github.com/size-module/backend/internal/modules/parts"
 	"github.com/size-module/backend/internal/modules/plans"
+	"github.com/size-module/backend/internal/modules/rules"
 	"github.com/size-module/backend/internal/modules/stock"
 	"github.com/size-module/backend/internal/optimizer/core"
 	"github.com/size-module/backend/internal/platform/config"
@@ -35,6 +36,7 @@ type Deps struct {
 	Plans      *plans.Handler
 	Campaigns  *campaigns.Handler
 	Kpis       *kpis.Handler
+	Rules      *rules.Handler
 	DBHealth   func(ctx context.Context) error
 }
 
@@ -82,6 +84,9 @@ func New(deps Deps) http.Handler {
 		}
 		if deps.Kpis != nil {
 			deps.Kpis.Routes(r)
+		}
+		if deps.Rules != nil {
+			deps.Rules.Routes(r)
 		}
 	})
 	return r

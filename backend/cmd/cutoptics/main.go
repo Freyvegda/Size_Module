@@ -26,6 +26,7 @@ import (
 	"github.com/size-module/backend/internal/modules/kpis"
 	"github.com/size-module/backend/internal/modules/parts"
 	"github.com/size-module/backend/internal/modules/plans"
+	"github.com/size-module/backend/internal/modules/rules"
 	"github.com/size-module/backend/internal/modules/stock"
 	"github.com/size-module/backend/internal/optimizer"
 	"github.com/size-module/backend/internal/platform/config"
@@ -97,7 +98,9 @@ func main() {
 		plansStore    plans.Store
 		campaignStore campaigns.Store
 		kpisStore     kpis.Store
+		rulesStore    rules.Store
 		remnants      jobs.RemnantSource
+		ruleProfiles  jobs.RulesSource
 		queueStore    jobs.QueueStore
 		worker        *jobs.Worker
 		dbHealth      func(context.Context) error
@@ -109,6 +112,8 @@ func main() {
 		stockStore, plansStore, remnants = store, store, store
 		campaignStore = store
 		kpisStore = store
+		rulesStore = store
+		ruleProfiles = store
 		queueStore = store
 		dbHealth = func(c context.Context) error { return postgres.Healthy(c, pool) }
 		worker = jobs.NewWorker(store, service, hub, cfg.Workers)
@@ -124,7 +129,7 @@ func main() {
 	handler := httpserver.New(httpserver.Deps{
 		Config:     cfg,
 		Registry:   registry,
-		Jobs:       jobs.NewHandler(service, jobsStore, queueStore, hub, canceller, remnants),
+		Jobs:       jobs.NewHandler(service, jobsStore, queueStore, hub, canceller, remnants, ruleProfiles),
 		Catalog:    catalog.NewHandler(catalogStore),
 		Parts:      parts.NewHandler(partsStore),
 		Assemblies: assemblies.NewHandler(assemblyStore),
@@ -132,6 +137,7 @@ func main() {
 		Plans:      plans.NewHandler(plansStore, service),
 		Campaigns:  campaigns.NewHandler(campaignStore, service, remnants),
 		Kpis:       kpis.NewHandler(kpisStore),
+		Rules:      rules.NewHandler(rulesStore),
 		DBHealth:   dbHealth,
 	})
 

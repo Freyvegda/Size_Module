@@ -232,6 +232,7 @@ type RulesProfile struct {
 	IsDefault bool               `json:"is_default"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	Objective []byte             `json:"objective"`
 }
 
 type StockFormat struct {

@@ -98,8 +98,10 @@ material-optimization platform. In scope: catalogue (materials, stock, parts),
 the asynchronous job queue with SSE progress, the **remnant lifecycle**
 (physical stock pieces, labelled offcuts, remnant-first allocation, plan
 acceptance) and **plan editing** (validated versions, locked placements,
-re-solve, CSV/SVG/DXF/PDF exports). Out of scope for now (see `plan.txt` and the
-README roadmap): costing, auth, 3D bin packing, irregular nesting.
+re-solve, CSV/SVG/DXF/PDF exports), plus **costing/KPIs**, **products
+(assemblies)** and **campaigns** that share a stock budget. Out of scope for now
+(see `plan.txt` and the README roadmap): auth, 3D bin packing, irregular
+nesting.
 
 ---
 

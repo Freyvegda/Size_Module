@@ -228,6 +228,24 @@ func (s *Store) AcceptPlan(ctx context.Context, planID string) (plans.AcceptResu
 		return plans.AcceptResult{}, err
 	}
 
+	// A campaign run already registered this plan's offcuts as available
+	// remnants (labelled CMP-…). Accepting must reuse them rather than mint a
+	// second, OFF-… copy, so the pool stays one ledger.
+	existingRemnants, err := q.ListStockItems(ctx, db.ListStockItemsParams{
+		PlantID:   plant.ID,
+		IsRemnant: boolPtr(true),
+	})
+	if err != nil {
+		return plans.AcceptResult{}, err
+	}
+	alreadyRegistered := false
+	for _, r := range existingRemnants {
+		if r.ParentPlanID.Valid && uuid.UUID(r.ParentPlanID.Bytes) == id {
+			alreadyRegistered = true
+			break
+		}
+	}
+
 	result := plans.AcceptResult{PlanID: planID, Sheets: len(sheets)}
 	for _, sh := range sheets {
 		is1D := sheetIs1D(sh, stockByID, planRow.Solver)
@@ -275,6 +293,10 @@ func (s *Store) AcceptPlan(ctx context.Context, planID string) (plans.AcceptResu
 			if !offcutReusable(off, is1D, rules) {
 				continue
 			}
+			if alreadyRegistered {
+				// Already a real piece from the campaign run; not created twice.
+				continue
+			}
 			dims := remnantDims(off, is1D, format)
 			row, err := q.CreateStockItem(ctx, db.CreateStockItemParams{
 				PlantID:          plant.ID,
@@ -300,6 +322,30 @@ func (s *Store) AcceptPlan(ctx context.Context, planID string) (plans.AcceptResu
 				WidthMicron:  row.WidthUm,
 				HeightMicron: row.HeightUm,
 			})
+		}
+	}
+
+	if alreadyRegistered {
+		// Report the remnants that were already registered by the campaign run
+		// and release them into the plant pool now that the plan is accepted.
+		for _, r := range existingRemnants {
+			if r.ParentPlanID.Valid && uuid.UUID(r.ParentPlanID.Bytes) == id {
+				if r.Status != "available" {
+					if _, err := q.UpdateStockItem(ctx, db.UpdateStockItemParams{
+						ID:     r.ID,
+						Status: strPtr("available"),
+					}); err != nil {
+						return plans.AcceptResult{}, err
+					}
+				}
+				result.RemnantsCreated = append(result.RemnantsCreated, plans.RemnantRef{
+					ID:           r.ID.String(),
+					Label:        r.Label,
+					LengthMicron: r.LengthUm,
+					WidthMicron:  r.WidthUm,
+					HeightMicron: r.HeightUm,
+				})
+			}
 		}
 	}
 
@@ -504,3 +550,7 @@ func formatUUID(format *db.StockFormat) pgtype.UUID {
 }
 
 func int32Ptr(v int32) *int32 { return &v }
+
+func boolPtr(v bool) *bool { return &v }
+
+func strPtr(v string) *string { return &v }

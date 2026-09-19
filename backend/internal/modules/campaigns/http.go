@@ -13,6 +13,7 @@ import (
 	"github.com/size-module/backend/internal/optimizer"
 	"github.com/size-module/backend/internal/optimizer/core"
 	"github.com/size-module/backend/internal/platform/httpx"
+	"github.com/size-module/backend/internal/platform/id"
 )
 
 // DefaultLimit is the page size of GET /campaigns when none is given.
@@ -189,6 +190,10 @@ func (h *Handler) addItem(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "invalid_input", "an item needs at least one part")
 		return
 	}
+	if _, _, err := itemMaterial(Item{Parts: in.Parts}); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid_item", err.Error())
+		return
+	}
 	detail, err := h.store.AddItem(r.Context(), chi.URLParam(r, "id"), in)
 	if err != nil {
 		h.storeError(w, err, "add_item_failed")
@@ -244,7 +249,11 @@ func (h *Handler) runNext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	problem := BuildItemProblem(detail.Campaign, item, req.BudgetMS)
+	problem, err := BuildItemProblem(detail.Campaign, item, req.BudgetMS)
+	if err != nil {
+		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_item", err.Error())
+		return
+	}
 	budget := problem.BudgetMS
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(budget)*time.Millisecond+10*time.Second)
 	defer cancel()
@@ -255,9 +264,22 @@ func (h *Handler) runNext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stock := ConsumeBudget(detail.Stock, result.Solution, problem.Rules,
+	// Offcuts get real physical ids here: the budget references them and
+	// CompleteItem registers them as available stock_items, so accepting a plan
+	// that used one actually consumes it instead of silently missing it.
+	newRemnantIDs := map[string]string{}
+	stock := ConsumeBudgetWithIDs(detail.Stock, result.Solution, problem.Rules,
 		func(sheetIndex, offcutIndex int) string {
 			return RemnantLabel(detail.ID, item.Seq, sheetIndex, offcutIndex)
+		},
+		func(sheetIndex, offcutIndex int) string {
+			key := strconv.Itoa(sheetIndex) + ":" + strconv.Itoa(offcutIndex)
+			if existing, ok := newRemnantIDs[key]; ok {
+				return existing
+			}
+			created := id.New()
+			newRemnantIDs[key] = created
+			return created
 		})
 
 	updated, err := h.store.CompleteItem(r.Context(), detail.ID, item.ID, problem, result, stock)
@@ -268,21 +290,66 @@ func (h *Handler) runNext(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, updated)
 }
 
+// itemMaterial reports the single material and dimension profile an item is
+// about. An item that mixes materials or dimensions cannot be solved as one
+// problem, so it is rejected instead of being silently half-planned.
+func itemMaterial(item Item) (material, profile string, err error) {
+	has2D, has1D := false, false
+	for _, p := range item.Parts {
+		switch {
+		case p.Width > 0 && p.Height > 0:
+			has2D = true
+		case p.Length > 0:
+			has1D = true
+		}
+		if p.MaterialSpecID != "" {
+			if material != "" && material != p.MaterialSpecID {
+				return "", "", errors.New("an item must use a single material")
+			}
+			material = p.MaterialSpecID
+		}
+	}
+	switch {
+	case has2D && has1D:
+		return "", "", errors.New("an item must contain parts of a single dimension profile")
+	case has2D:
+		profile = "2d"
+	case has1D:
+		profile = "1d"
+	}
+	return material, profile, nil
+}
+
 // BuildItemProblem turns one campaign item into a self-contained problem: the
-// item's parts, the campaign's remaining stock budget, its rules/objective and
-// a per-item seed so a campaign is reproducible.
-func BuildItemProblem(c Campaign, item Item, budgetMS int) core.Problem {
+// item's parts, the campaign's remaining stock budget for the item's material,
+// its rules/objective and a per-item seed so a campaign is reproducible.
+func BuildItemProblem(c Campaign, item Item, budgetMS int) (core.Problem, error) {
 	if budgetMS <= 0 {
 		budgetMS = c.BudgetMS
 	}
-	return core.Normalize(core.Problem{
+	material, _, err := itemMaterial(item)
+	if err != nil {
+		return core.Problem{}, err
+	}
+	stock := make([]core.StockItem, 0, len(c.Stock))
+	for _, entry := range c.Stock {
+		if material != "" && entry.MaterialSpecID != "" && entry.MaterialSpecID != material {
+			continue
+		}
+		stock = append(stock, entry)
+	}
+	problem := core.Normalize(core.Problem{
 		Parts:     item.Parts,
-		Stocks:    c.Stock,
+		Stocks:    stock,
 		Rules:     c.Rules,
 		Objective: c.Objective,
 		BudgetMS:  budgetMS,
 		Seed:      c.Seed + uint64(item.Seq),
 	})
+	if len(problem.Stocks) == 0 {
+		return core.Problem{}, errors.New("campaign budget has no stock for the item's material")
+	}
+	return problem, nil
 }
 
 // storeError maps the module's sentinel errors onto HTTP responses.

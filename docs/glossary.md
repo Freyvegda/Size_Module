@@ -19,12 +19,10 @@ fabric are all described with the same words; only the rules profile changes.
 | **Net cost** | Material taken minus the value of leftovers that stay in stock: what the order actually consumed. |
 | **Realized yield (KPI)** | Yield over **accepted** plans in a window; "created" covers every plan, so pipeline and shop reality can be compared. |
 | **Campaign** | An ordered set of jobs planned against one shared stock budget; running an item consumes sheets and returns its offcuts to the pool for the items that follow. |
-| **Campaign budget** | The remaining stock list of a campaign: it shrinks as sheets are used and grows as `CMP-…` offcut remnants re-enter. |
-| **Assembly / product** | A product built from subparts (e.g. a window): overall size plus ordered components in a local frame. Catalog definition; not cut by the optimizer yet. |
+| **Campaign budget** | The remaining stock list of a campaign: it shrinks as sheets are used and grows as `CMP-…` offcuts re-enter. Re-entering offcuts are registered as real available stock items, so the budget and the physical pool stay one ledger. |
 | **Scrap** | Leftover material too small to be reusable. |
 | **Part** | A thing to produce, defined by its **finished** size. |
-| **Assembly (product)** | A thing the shop *builds* from subparts, e.g. a window or a table: an overall size, a bound **material spec** and an ordered component list. Not itself a cut piece — but it can be *exploded* into cut parts (Products → Run cut plan). |
-| **Explode (product)** | Turning a product's components into cuttable parts: a component's cut face is the **two largest** of its three dimensions (1D) or the single largest, and identical parts are merged. |
+| **Assembly (product)** | A thing the shop *builds* from subparts, e.g. a window or a table: an overall size, a bound **material spec** and an ordered component list. Not itself a cut piece — but it can be *exploded* into cut parts (Products → Run cut plan). A product that mixes materials/dimensions is planned as one order per **(material spec, dimension profile)**. |
 | **Component (subpart)** | One box of an assembly: a role (`glass`, `leg`, …), a kind (`beam`/`panel`/`custom`), a quantity, its dimensions, an optional material spec (else the product's) and its position in the assembly's local frame (origin bottom-left-front; x right, y up, z out of the wall). Drives both the 2D elevation and the 3D view. |
 | **Routing** | The ordered operations applied to a part (grinding, edge deletion, ...), each with an **allowance**. |
 | **Allowance** | Extra material needed by an operation, per edge or total. |

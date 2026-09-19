@@ -132,7 +132,10 @@ func runCampaignItem(t *testing.T, store *Store, detail campaigns.Detail) campai
 	if err != nil {
 		t.Fatalf("next item: %v", err)
 	}
-	problem := campaigns.BuildItemProblem(detail.Campaign, item, 0)
+	problem, err := campaigns.BuildItemProblem(detail.Campaign, item, 0)
+	if err != nil {
+		t.Fatalf("build problem for item %d: %v", item.Seq, err)
+	}
 	result, err := optimizer.Solve(ctx, problem, "", optimizer.DefaultRegistry(), nil)
 	if err != nil {
 		t.Fatalf("solve item %d: %v", item.Seq, err)

@@ -32,6 +32,15 @@ func RemnantLabel(campaignID string, itemSeq, sheetIndex, offcutIndex int) strin
 // The function is pure: the caller decides how to persist the result, which
 // keeps budget arithmetic testable without a database.
 func ConsumeBudget(stock []core.StockItem, sol core.Solution, rules core.Rules, label func(sheetIndex, offcutIndex int) string) []core.StockItem {
+	return ConsumeBudgetWithIDs(stock, sol, rules, label, func(_, _ int) string { return id.New() })
+}
+
+// ConsumeBudgetWithIDs is ConsumeBudget with caller-supplied ids for the
+// remnants that re-enter the budget. The campaign store uses it to point the
+// budget at real stock_items rows, so accepting a later plan consumes the piece
+// instead of silently missing it. newID is only called for offcuts that pass
+// the offcut policy.
+func ConsumeBudgetWithIDs(stock []core.StockItem, sol core.Solution, rules core.Rules, label func(sheetIndex, offcutIndex int) string, newID func(sheetIndex, offcutIndex int) string) []core.StockItem {
 	// Count how many sheets came from each stock entry. A physical remnant has
 	// quantity one, so a single use removes it from the budget.
 	used := map[string]int{}
@@ -66,12 +75,15 @@ func ConsumeBudget(stock []core.StockItem, sol core.Solution, rules core.Rules, 
 				continue
 			}
 			remnant := core.StockItem{
-				ID:          id.New(),
+				ID:          newID(sheet.Index, i),
+				FormatID:    original.FormatID,
 				Code:        sheet.StockCode,
 				Label:       label(sheet.Index, i),
 				Quantity:    1,
 				CostPerUnit: remnantCost(off, is1D, original),
 				IsRemnant:   true,
+				// Carry the material so the next item can be scoped to it.
+				MaterialSpecID: original.MaterialSpecID,
 			}
 			if is1D {
 				remnant.Length = off.W

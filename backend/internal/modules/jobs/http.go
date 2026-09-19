@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -42,6 +43,13 @@ type RemnantSource interface {
 	ListRemnants(ctx context.Context, materialSpecID string) ([]core.StockItem, error)
 }
 
+// RulesSource resolves a stored rules profile into engine rules and objective.
+// It is optional: without a database, or without ?rulesProfileId=, the rules in
+// the submitted problem are used as-is.
+type RulesSource interface {
+	RulesProfile(ctx context.Context, id string) (core.Rules, core.Objective, error)
+}
+
 // Canceller stops a job running in this process; the worker implements it.
 type Canceller interface {
 	Cancel(jobID string) bool
@@ -54,10 +62,11 @@ type Handler struct {
 	hub       *events.Hub
 	canceller Canceller
 	remnants  RemnantSource
+	rules     RulesSource
 }
 
-func NewHandler(svc *Service, store Store, queue QueueStore, hub *events.Hub, canceller Canceller, remnants RemnantSource) *Handler {
-	return &Handler{svc: svc, store: store, queue: queue, hub: hub, canceller: canceller, remnants: remnants}
+func NewHandler(svc *Service, store Store, queue QueueStore, hub *events.Hub, canceller Canceller, remnants RemnantSource, ruleProfiles RulesSource) *Handler {
+	return &Handler{svc: svc, store: store, queue: queue, hub: hub, canceller: canceller, remnants: remnants, rules: ruleProfiles}
 }
 
 func (h *Handler) Routes(r chi.Router) {
@@ -90,7 +99,13 @@ func (h *Handler) optimize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	problem, err := h.withRemnants(r.Context(), r, problem)
+	problem, err := h.withRulesProfile(r.Context(), r, problem)
+	if err != nil {
+		httpx.Error(w, http.StatusUnprocessableEntity, "unknown_rules_profile", err.Error())
+		return
+	}
+
+	problem, err = h.withRemnants(r.Context(), r, problem)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "remnant_lookup_failed", err.Error())
 		return
@@ -137,19 +152,67 @@ func (h *Handler) withRemnants(ctx context.Context, r *http.Request, problem cor
 	if h.remnants == nil {
 		return problem, nil
 	}
-	items, err := h.remnants.ListRemnants(ctx, r.URL.Query().Get("materialSpecId"))
+	// Filter by the material the problem is actually about. An explicit
+	// ?materialSpecId= wins; otherwise use the specs named by the parts, so a
+	// glass order never receives a wood remnant.
+	specs := []string{}
+	if explicit := strings.TrimSpace(r.URL.Query().Get("materialSpecId")); explicit != "" {
+		specs = append(specs, explicit)
+	} else {
+		seen := map[string]bool{}
+		for _, part := range problem.Parts {
+			if part.MaterialSpecID == "" || seen[part.MaterialSpecID] {
+				continue
+			}
+			seen[part.MaterialSpecID] = true
+			specs = append(specs, part.MaterialSpecID)
+		}
+	}
+	if len(specs) == 0 {
+		specs = append(specs, "")
+	}
+
+	profile := core.DetectProfile(problem)
+	added := map[string]bool{}
+	for _, spec := range specs {
+		items, err := h.remnants.ListRemnants(ctx, spec)
+		if err != nil {
+			return problem, err
+		}
+		for _, item := range items {
+			if added[item.ID] {
+				continue
+			}
+			if profile == core.Profile1D && item.Length <= 0 {
+				continue
+			}
+			if profile == core.Profile2D && (item.Width <= 0 || item.Height <= 0) {
+				continue
+			}
+			added[item.ID] = true
+			problem.Stocks = append(problem.Stocks, item)
+		}
+	}
+	return problem, nil
+}
+
+// withRulesProfile applies a stored rules profile when the caller passes
+// ?rulesProfileId=. Rules explicitly present in the request body win, so a
+// client can still override a single field on top of a preset.
+func (h *Handler) withRulesProfile(ctx context.Context, r *http.Request, problem core.Problem) (core.Problem, error) {
+	id := r.URL.Query().Get("rulesProfileId")
+	if id == "" || h.rules == nil {
+		return problem, nil
+	}
+	profileRules, profileObjective, err := h.rules.RulesProfile(ctx, id)
 	if err != nil {
 		return problem, err
 	}
-	profile := core.DetectProfile(problem)
-	for _, item := range items {
-		if profile == core.Profile1D && item.Length <= 0 {
-			continue
-		}
-		if profile == core.Profile2D && (item.Width <= 0 || item.Height <= 0) {
-			continue
-		}
-		problem.Stocks = append(problem.Stocks, item)
+	if problem.Rules == (core.Rules{}) {
+		problem.Rules = profileRules
+	}
+	if problem.Objective.Weights == (core.Weights{}) {
+		problem.Objective = profileObjective
 	}
 	return problem, nil
 }
@@ -202,7 +265,12 @@ func (h *Handler) submitJob(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
-	problem, err := h.withRemnants(r.Context(), r, problem)
+	problem, err := h.withRulesProfile(r.Context(), r, problem)
+	if err != nil {
+		httpx.Error(w, http.StatusUnprocessableEntity, "unknown_rules_profile", err.Error())
+		return
+	}
+	problem, err = h.withRemnants(r.Context(), r, problem)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "remnant_lookup_failed", err.Error())
 		return

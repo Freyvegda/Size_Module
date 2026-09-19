@@ -373,6 +373,97 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiError" }
 
+  /api/v1/rules-profiles:
+    get:
+      tags: [rules]
+      summary: List rules profiles (constraint + objective presets)
+      responses:
+        "200":
+          description: Rules profiles
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rulesProfiles]
+                properties:
+                  rulesProfiles:
+                    type: array
+                    items: { $ref: "#/components/schemas/RulesProfile" }
+        "503":
+          description: Database not configured or unreachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    post:
+      tags: [rules]
+      summary: Create a rules profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SaveRulesProfileInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RulesProfile" }
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "409":
+          description: Duplicate code
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /api/v1/rules-profiles/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [rules]
+      summary: Get a rules profile
+      responses:
+        "200":
+          description: Rules profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RulesProfile" }
+        "404":
+          description: Unknown profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    put:
+      tags: [rules]
+      summary: Update a rules profile (code is immutable)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SaveRulesProfileInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RulesProfile" }
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: Unknown profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
   /api/v1/parts:
     get:
       tags: [catalog]
@@ -1132,6 +1223,27 @@ components:
         priorities:
           type: array
           items: { type: string }
+
+    RulesProfile:
+      type: object
+      required: [id, code]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        rules: { $ref: "#/components/schemas/Rules" }
+        objective: { $ref: "#/components/schemas/Objective" }
+        isDefault: { type: boolean }
+
+    SaveRulesProfileInput:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        rules: { $ref: "#/components/schemas/Rules" }
+        objective: { $ref: "#/components/schemas/Objective" }
+        isDefault: { type: boolean }
 
     Problem:
       type: object

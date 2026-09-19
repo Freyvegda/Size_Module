@@ -245,13 +245,21 @@ export const runDemoOptimization = createAsyncThunk(
 export interface OptimizeProblemArgs {
   problem: Problem
   dimension: DimensionProfile
+  /** Scope remnant injection (and logging) to one material. */
+  materialSpecId?: string
+  /** Ask the server to append the plant's available remnants first. */
+  includeRemnants?: boolean
 }
 
 export const optimizeProblem = createAsyncThunk(
   'optimizer/optimizeProblem',
   async (args: OptimizeProblemArgs) => {
-    const response = await api.post<OptimizeResponse>('/api/v1/optimize', args.problem)
-    return { response, dimension: args.dimension }
+    const query = new URLSearchParams()
+    if (args.includeRemnants) query.set('includeRemnants', 'true')
+    if (args.materialSpecId) query.set('materialSpecId', args.materialSpecId)
+    const suffix = query.size > 0 ? `?${query.toString()}` : ''
+    const response = await api.post<OptimizeResponse>(`/api/v1/optimize${suffix}`, args.problem)
+    return { response, dimension: args.dimension, materialSpecId: args.materialSpecId }
   },
 )
 

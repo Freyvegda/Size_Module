@@ -12,13 +12,14 @@ Two facts drive this plan:
    shows a single "Initial commit"; the working tree carries ~40 modified and
    ~30 new paths. Building further on a dirty tree makes bisecting and the
    golden gate unreliable.
-2. **Four seams are open** (confirmed in code), and they are where the cheapest
-   forward value lives.
+2. **Three seams are open** (confirmed in code); the assembly seam was closed
+   by the per-material order flow. They are where the cheapest forward value
+   lives.
 
 | # | Seam | Evidence |
 |---|---|---|
 | 1 | Rules profiles are dead data: no API, jobs always use `core.DefaultRules()` | `rules_profiles` table + `cut_jobs.rules_profile_id` exist; no module reads them |
-| 2 | Assemblies never reach the optimizer ("catalog definitions only") | `frontend/AGENTS.md`; no explode/submit path |
+| 2 | ~~Assemblies never reach the optimizer~~ **addressed**: a product explodes per (material spec, dimension profile) and plans against that material's catalog stock, applying routing cut sizes | `frontend/src/features/optimizer/buildProblem.ts`, `ProductsPage.tsx` |
 | 3 | Defect maps are engine-ready but unwired | `core.StockItem.Defects` honored in shelf/beam/maxrects/improve/pinned; zero `defect` in `db/` or `modules/` |
 | 4 | `MaxCutStages` is declared, never enforced | `core/types.go:143`, no other reader |
 

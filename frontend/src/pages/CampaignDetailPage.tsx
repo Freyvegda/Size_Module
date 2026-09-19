@@ -30,9 +30,10 @@ import {
   runCampaignNext,
   updateCampaign,
 } from '@/features/campaigns/campaignSlice'
+import { toProblemPart } from '@/features/optimizer/buildProblem'
 import { loadPlanDetail } from '@/features/optimizer/optimizerSlice'
 import { micronToMm } from '@/lib/format'
-import type { CampaignItemStatus, Part, ProblemPart, StockItem } from '@/lib/types'
+import type { CampaignItemStatus, ProblemPart, StockItem } from '@/lib/types'
 
 const itemVariant: Record<CampaignItemStatus, 'default' | 'secondary' | 'destructive'> = {
   pending: 'secondary',
@@ -46,21 +47,6 @@ function stockSize(entry: StockItem): string {
     return `${micronToMm(entry.width)} × ${micronToMm(entry.height)} mm`
   }
   return '—'
-}
-
-function toProblemPart(part: Part, quantity: number): ProblemPart {
-  const base = {
-    id: part.id,
-    code: part.code,
-    quantity,
-    grain: part.grain,
-    allowRotate: part.allowRotate,
-    priority: part.priority,
-  }
-  if (part.finishedLengthMicron > 0) {
-    return { ...base, length: part.finishedLengthMicron }
-  }
-  return { ...base, width: part.finishedWidthMicron, height: part.finishedHeightMicron }
 }
 
 export function CampaignDetailPage() {

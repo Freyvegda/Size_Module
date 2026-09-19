@@ -29,6 +29,7 @@ import {
   fetchMaterialSpecs,
   fetchStockFormats,
 } from '@/features/catalog/catalogSlice'
+import { buildCatalogOrders, type OrderLine } from '@/features/optimizer/buildProblem'
 import { optimizeProblem } from '@/features/optimizer/optimizerSlice'
 import { micronToMm, mmToMicron } from '@/lib/format'
 import type {
@@ -37,8 +38,8 @@ import type {
   ComponentKind,
   CreateAssemblyInput,
   DimensionProfile,
-  Problem,
-  StockItem,
+  MaterialSpec,
+  StockFormat,
 } from '@/lib/types'
 
 // ------------------------------------------------------------------ drafts ---
@@ -206,13 +207,7 @@ export function ProductsPage() {
   // Material resolution for the active product (draft wins over the selection).
   const activeMaterialSpecId = draft ? draft.materialSpecId : (selected?.materialSpecId ?? '')
   const activeSpec = materialSpecs.find((spec) => spec.id === activeMaterialSpecId)
-  const profile: DimensionProfile = activeSpec?.dimensionProfile ?? '2d'
   const familySpecs = materialSpecs.filter((spec) => spec.materialId === activeSpec?.materialId)
-
-  const matchingFormats = useMemo(() => {
-    if (!activeSpec) return []
-    return stockFormats.filter((format) => format.specCode === activeSpec.code)
-  }, [stockFormats, activeSpec])
 
   // Components in the shape the solver understands, with material resolved.
   const explodeSource = useMemo<ExplodeComponent[]>(() => {
@@ -240,6 +235,39 @@ export function ProductsPage() {
     }
     return []
   }, [draft, selected])
+
+  // One plan group per material: a window built from glass panels (2D) and
+  // aluminium frame beams (1D) becomes two solvable problems instead of one
+  // impossible mixed one.
+  const planGroups = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        spec: MaterialSpec
+        profile: DimensionProfile
+        components: ExplodeComponent[]
+        formats: StockFormat[]
+      }
+    >()
+    for (const component of explodeSource) {
+      const specId = component.materialSpecId
+      if (!specId) continue
+      const spec = materialSpecs.find((item) => item.id === specId)
+      if (!spec) continue
+      const existing = groups.get(specId)
+      if (existing) {
+        existing.components.push(component)
+      } else {
+        groups.set(specId, {
+          spec,
+          profile: spec.dimensionProfile,
+          components: [component],
+          formats: stockFormats.filter((format) => format.materialSpecId === specId),
+        })
+      }
+    }
+    return [...groups.values()]
+  }, [explodeSource, materialSpecs, stockFormats])
 
   const updateComponent = (key: string, patch: Partial<DraftComponent>) =>
     setDraft((current) =>
@@ -360,47 +388,42 @@ export function ProductsPage() {
     }
   }
 
-  // Explode the product into cut parts, plan them against matching stock, and
-  // open the result in the plan viewer.
+  // Explode every group into cut parts, plan each against its own material's
+  // stock, and open the result in the plan viewer.
   const runCutPlan = async () => {
-    if (!activeSpec || explodeSource.length === 0 || matchingFormats.length === 0) return
-
-    const parts = explodeComponents({
-      components: explodeSource,
-      profile,
-      productQuantity: Math.round(toNumber(productQuantity)) || 1,
-      fallbackMaterialSpecId: activeSpec.id,
-    })
-    const stocks: StockItem[] = matchingFormats.map((format) =>
-      profile === '1d'
-        ? {
-            id: format.id,
-            code: format.code,
-            length: format.lengthMicron,
-            ...(format.widthMicron > 0 ? { width: format.widthMicron } : {}),
-            quantity: Math.max(format.onHandQty, 1),
-            costPerUnit: format.costPerUnit,
-          }
-        : {
-            id: format.id,
-            code: format.code,
-            width: format.widthMicron,
-            height: format.heightMicron,
-            quantity: Math.max(format.onHandQty, 1),
-            costPerUnit: format.costPerUnit,
-          },
-    )
-    const problem: Problem = { parts, stocks, budgetMs: 5000 }
-
-    const action = await dispatch(optimizeProblem({ problem, dimension: profile }))
-    if (optimizeProblem.fulfilled.match(action)) {
-      navigate('/viewer')
+    const lines: OrderLine[] = []
+    for (const group of planGroups) {
+      if (group.formats.length === 0) continue
+      const parts = explodeComponents({
+        components: group.components,
+        profile: group.profile,
+        productQuantity: Math.round(toNumber(productQuantity)) || 1,
+        fallbackMaterialSpecId: group.spec.id,
+      })
+      for (const part of parts) {
+        lines.push({ part, materialSpecId: group.spec.id, dimension: group.profile })
+      }
     }
+    if (lines.length === 0) return
+
+    const orders = buildCatalogOrders({ lines, materialSpecs, stockFormats })
+    for (const order of orders) {
+      const action = await dispatch(
+        optimizeProblem({
+          problem: order.problem,
+          dimension: order.dimension,
+          materialSpecId: order.materialSpecId,
+          includeRemnants: true,
+        }),
+      )
+      if (!optimizeProblem.fulfilled.match(action)) return
+    }
+    navigate('/viewer')
   }
 
   const previewComponents = previewGeometry.components
-  const canRun =
-    !!activeSpec && explodeSource.length > 0 && matchingFormats.length > 0 && runStatus !== 'loading'
+  const missingStock = planGroups.some((group) => group.formats.length === 0)
+  const canRun = planGroups.length > 0 && !missingStock && runStatus !== 'loading'
 
   return (
     <div className="space-y-4">
@@ -985,9 +1008,11 @@ export function ProductsPage() {
             <CardHeader>
               <CardTitle>Cut plan</CardTitle>
               <CardDescription>
-                {activeSpec
-                  ? `${activeSpec.materialName} · ${activeSpec.name || activeSpec.code} (${profile})`
-                  : 'Choose a material and type for the product'}
+                {planGroups.length > 0
+                  ? `${planGroups.length} material(s): ${planGroups
+                      .map((group) => `${group.spec.name || group.spec.code} (${group.profile})`)
+                      .join(', ')}`
+                  : 'Set a material on the product or on its subparts'}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -1008,19 +1033,21 @@ export function ProductsPage() {
               </div>
               <ul className="space-y-1 text-xs text-muted-foreground">
                 <li>{explodeSource.length} subpart(s) to cut</li>
-                <li>
-                  {matchingFormats.length} stock format(s) matching{' '}
-                  {activeSpec ? activeSpec.name || activeSpec.code : '—'}
-                </li>
+                {planGroups.map((group) => (
+                  <li key={group.spec.id}>
+                    {group.formats.length} stock format(s) for{' '}
+                    {group.spec.name || group.spec.code} ({group.profile})
+                  </li>
+                ))}
               </ul>
-              {!activeSpec && (
+              {explodeSource.length > 0 && planGroups.length === 0 && (
                 <p className="text-xs text-muted-foreground">
-                  Pick a material on the Stock or Materials page first, then choose it here.
+                  Give each subpart a material type (or set a product material), then plan.
                 </p>
               )}
-              {activeSpec && matchingFormats.length === 0 && (
+              {missingStock && (
                 <p className="text-xs text-destructive">
-                  No stock for this type yet. Add a stock format on the Stock page.
+                  No stock for at least one subpart material. Add a stock format on the Stock page.
                 </p>
               )}
               {runError && <p className="text-xs text-destructive">{runError}</p>}

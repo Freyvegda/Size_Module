@@ -267,6 +267,12 @@ func (s *Store) CompleteItem(ctx context.Context, campaignID, itemID string, pro
 	if err != nil {
 		return campaigns.Detail{}, err
 	}
+	// The offcuts that re-entered the budget become real available remnants
+	// linked to this plan, so accepting a later plan that uses one actually
+	// consumes the piece instead of missing it.
+	if err := persistCampaignRemnants(ctx, q, row.PlantID, planID, stock); err != nil {
+		return campaigns.Detail{}, err
+	}
 	if err := q.MarkJobDone(ctx, db.MarkJobDoneParams{ID: job.ID, Result: marshalJSON(result)}); err != nil {
 		return campaigns.Detail{}, err
 	}
@@ -301,6 +307,51 @@ func (s *Store) CompleteItem(ctx context.Context, campaignID, itemID string, pro
 		return campaigns.Detail{}, err
 	}
 	return s.GetCampaign(ctx, campaignID)
+}
+
+// persistCampaignRemnants writes the offcuts that re-entered a campaign budget
+// as real available stock_items. Entries that already exist in the pool (a
+// remnant snapshot taken at campaign creation, or a format-backed line) are
+// left alone; only the newly minted CMP- offcuts are inserted, so the budget
+// and the physical pool stay one ledger.
+func persistCampaignRemnants(ctx context.Context, q *db.Queries, plantID, planID uuid.UUID, stock []core.StockItem) error {
+	for _, entry := range stock {
+		if !entry.IsRemnant {
+			continue
+		}
+		parsed, err := uuid.Parse(entry.ID)
+		if err != nil {
+			continue
+		}
+		if _, err := q.GetStockItem(ctx, parsed); err == nil {
+			continue
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		params := db.CreateStockItemParams{
+			PlantID:     plantID,
+			Code:        entry.Code,
+			Label:       entry.Label,
+			LengthUm:    entry.Length,
+			WidthUm:     entry.Width,
+			HeightUm:    entry.Height,
+			IsRemnant:   true,
+			// Reserved until the plan is accepted: the campaign budget can plan
+			// with it, but it is not offered as plant-wide stock yet.
+			Status:      "reserved",
+			CostPerUnit: entry.CostPerUnit,
+			ParentPlanID: pgtypeUUID(planID),
+		}
+		if entry.FormatID != "" {
+			if fid, err := uuid.Parse(entry.FormatID); err == nil {
+				params.FormatID = pgtype.UUID{Bytes: fid, Valid: true}
+			}
+		}
+		if _, err := q.CreateStockItem(ctx, params); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // campaignDetail loads a campaign's items and derives progress.
