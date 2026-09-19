@@ -7,6 +7,7 @@ import type {
   AcceptPlanResponse,
   CutMode,
   DimensionProfile,
+  EditPlanInput,
   JobEvent,
   JobProgressEvent,
   JobStatus,
@@ -15,7 +16,9 @@ import type {
   Metrics,
   OptimizeResponse,
   OptimizeResult,
+  PlanDetail,
   Problem,
+  ReoptimizePlanInput,
   Rules,
 } from '@/lib/types'
 import { isTerminalJobStatus } from '@/lib/types'
@@ -157,6 +160,9 @@ interface OptimizerState {
   acceptStatus: 'idle' | 'loading' | 'ready' | 'error'
   acceptResult?: AcceptPlanResponse
   acceptError?: string
+  // Editing / re-solving the archived plan.
+  planEditStatus: 'idle' | 'loading' | 'ready' | 'error'
+  planEditError?: string
 }
 
 const initialState: OptimizerState = {
@@ -167,6 +173,7 @@ const initialState: OptimizerState = {
   comparisonStatus: 'idle',
   jobRequest: 'idle',
   acceptStatus: 'idle',
+  planEditStatus: 'idle',
 }
 
 /**
@@ -227,6 +234,24 @@ export const runDemoOptimization = createAsyncThunk(
       demoProblemFor(profile, cutMode),
     )
     return { response, dimension: profile }
+  },
+)
+
+/**
+ * Runs a caller-built problem through the API. Used by the Products page to
+ * plan a designed product (exploded into cut parts) against its material's
+ * stock, then load the plan into the viewer.
+ */
+export interface OptimizeProblemArgs {
+  problem: Problem
+  dimension: DimensionProfile
+}
+
+export const optimizeProblem = createAsyncThunk(
+  'optimizer/optimizeProblem',
+  async (args: OptimizeProblemArgs) => {
+    const response = await api.post<OptimizeResponse>('/api/v1/optimize', args.problem)
+    return { response, dimension: args.dimension }
   },
 )
 
@@ -360,6 +385,43 @@ export const acceptPlan = createAsyncThunk('optimizer/acceptPlan', async (planId
   api.post<AcceptPlanResponse>(`/api/v1/plans/${planId}/accept`, {}),
 )
 
+/**
+ * Loads one archived plan with per-placement ids and locks. The optimizer
+ * response (and a job view) carries the layout without those ids, so an editor
+ * loads the stored version before it starts.
+ */
+export const loadPlanDetail = createAsyncThunk('optimizer/loadPlanDetail', async (planId: string) =>
+  api.get<PlanDetail>(`/api/v1/plans/${planId}`),
+)
+
+/**
+ * Saves hand edits as the next version of a plan. The server validates the
+ * layout (bounds, kerf, trim, guillotine feasibility) and rejects the edit
+ * with 422 when a piece cannot be produced where it was dragged.
+ */
+export const editPlan = createAsyncThunk('optimizer/editPlan', async (args: EditPlanInput) =>
+  api.post<PlanDetail>(`/api/v1/plans/${args.planId}/edit`, {
+    operations: args.operations,
+    name: args.name,
+  }),
+)
+
+/**
+ * Re-solves a plan, keeping locked placements exactly in place (pinned sheets).
+ * Optional operations are applied before solving, so a drag plus re-solve is
+ * one round trip.
+ */
+export const reoptimizePlan = createAsyncThunk(
+  'optimizer/reoptimizePlan',
+  async (args: ReoptimizePlanInput) =>
+    api.post<PlanDetail>(`/api/v1/plans/${args.planId}/reoptimize`, {
+      operations: args.operations,
+      solver: args.solver,
+      budgetMs: args.budgetMs,
+      name: args.name,
+    }),
+)
+
 const optimizerSlice = createSlice({
   name: 'optimizer',
   initialState,
@@ -453,6 +515,25 @@ const optimizerSlice = createSlice({
         state.runStatus = 'error'
         state.runError = action.error.message ?? 'Optimization failed'
       })
+      .addCase(optimizeProblem.pending, (state) => {
+        state.runStatus = 'loading'
+        state.runError = undefined
+        state.acceptStatus = 'idle'
+        state.acceptResult = undefined
+        state.acceptError = undefined
+      })
+      .addCase(optimizeProblem.fulfilled, (state, action) => {
+        state.runStatus = 'ready'
+        state.result = normalizeResult(action.payload.response.result)
+        state.dimension = action.payload.dimension
+        state.source = 'api'
+        state.lastJobId = action.payload.response.id
+        state.lastPlanId = action.payload.response.planId
+      })
+      .addCase(optimizeProblem.rejected, (state, action) => {
+        state.runStatus = 'error'
+        state.runError = action.error.message ?? 'Optimization failed'
+      })
       .addCase(compareSolvers.pending, (state) => {
         state.comparisonStatus = 'loading'
         state.comparisonError = undefined
@@ -510,6 +591,54 @@ const optimizerSlice = createSlice({
       .addCase(acceptPlan.rejected, (state, action) => {
         state.acceptStatus = 'error'
         state.acceptError = action.error.message ?? 'the plan could not be accepted'
+      })
+      .addCase(loadPlanDetail.pending, (state) => {
+        state.planEditStatus = 'loading'
+        state.planEditError = undefined
+      })
+      .addCase(loadPlanDetail.fulfilled, (state, action) => {
+        state.planEditStatus = 'ready'
+        state.result = normalizeResult(action.payload.result)
+        state.source = 'api'
+        state.lastPlanId = action.payload.id
+      })
+      .addCase(loadPlanDetail.rejected, (state, action) => {
+        state.planEditStatus = 'error'
+        state.planEditError = action.error.message ?? 'the stored plan could not be loaded'
+      })
+      .addCase(editPlan.pending, (state) => {
+        state.planEditStatus = 'loading'
+        state.planEditError = undefined
+      })
+      .addCase(editPlan.fulfilled, (state, action) => {
+        state.planEditStatus = 'ready'
+        state.result = normalizeResult(action.payload.result)
+        state.source = 'api'
+        state.lastPlanId = action.payload.id
+        state.acceptStatus = 'idle'
+        state.acceptResult = undefined
+        state.acceptError = undefined
+      })
+      .addCase(editPlan.rejected, (state, action) => {
+        state.planEditStatus = 'error'
+        state.planEditError = action.error.message ?? 'the edit could not be saved'
+      })
+      .addCase(reoptimizePlan.pending, (state) => {
+        state.planEditStatus = 'loading'
+        state.planEditError = undefined
+      })
+      .addCase(reoptimizePlan.fulfilled, (state, action) => {
+        state.planEditStatus = 'ready'
+        state.result = normalizeResult(action.payload.result)
+        state.source = 'api'
+        state.lastPlanId = action.payload.id
+        state.acceptStatus = 'idle'
+        state.acceptResult = undefined
+        state.acceptError = undefined
+      })
+      .addCase(reoptimizePlan.rejected, (state, action) => {
+        state.planEditStatus = 'error'
+        state.planEditError = action.error.message ?? 'the plan could not be re-solved'
       })
   },
 })

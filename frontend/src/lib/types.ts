@@ -13,6 +13,8 @@ export interface Rect {
 }
 
 export interface Placement {
+  /** Placement id from the plan API; required for edits. */
+  id?: string
   partId: string
   partCode: string
   x: number
@@ -21,6 +23,8 @@ export interface Placement {
   h: number
   rotated: boolean
   priority?: number
+  /** Locked placements stay exactly in place when a plan is re-solved. */
+  locked?: boolean
 }
 
 export interface SheetPlan {
@@ -89,6 +93,7 @@ export interface OptimizeResult {
   solution: Solution
   violations?: Violation[]
   score: number
+  cost?: CostReport
 }
 
 export interface OptimizeResponse {
@@ -172,6 +177,8 @@ export interface SolverCapabilities {
   Rotation: boolean
   Grain: boolean
   Remnants: boolean
+  /** True when the solver honours planner-locked placements. */
+  Pinned: boolean
   MaxParts: number
   /** Lower wins when the caller does not name a solver; 0 means unranked. */
   Rank: number
@@ -284,6 +291,39 @@ export interface CreateMaterialInput {
   attributes?: Record<string, unknown>
 }
 
+/** A concrete variant of a material family, e.g. Oak 18 mm under Wood. */
+export interface MaterialSpec {
+  id: string
+  materialId: string
+  materialCode: string
+  materialName: string
+  dimensionProfile: DimensionProfile
+  code: string
+  name: string
+  thicknessMicron: number
+  finish: string
+  color: string
+}
+
+export interface CreateMaterialSpecInput {
+  materialId: string
+  code: string
+  name?: string
+  thicknessMicron?: number
+  finish?: string
+  color?: string
+}
+
+export interface CreateStockFormatInput {
+  materialSpecId: string
+  code: string
+  lengthMicron?: number
+  widthMicron?: number
+  heightMicron?: number
+  onHandQty?: number
+  costPerUnit?: number
+}
+
 export interface StockFormat {
   id: string
   code: string
@@ -322,6 +362,68 @@ export interface CreatePartInput {
   grain?: GrainMode
   allowRotate?: boolean
   priority?: number
+}
+
+// --------------------------------------------------------------- assemblies ---
+
+export type AssemblyKind = 'window' | 'door' | 'generic'
+export type ComponentKind = 'beam' | 'panel' | 'custom'
+
+/** One subpart of a product: a box in the assembly's local frame. */
+export interface AssemblyComponent {
+  id: string
+  seq: number
+  role: string
+  kind: ComponentKind
+  name: string
+  materialSpecId?: string
+  /** How many of this subpart the product needs (the preview draws it once). */
+  quantity: number
+  widthMicron: number
+  heightMicron: number
+  depthMicron: number
+  offsetXMicron: number
+  offsetYMicron: number
+  offsetZMicron: number
+}
+
+/** A product built from subparts, e.g. a window with glass and frame beams. */
+export interface Assembly {
+  id: string
+  code: string
+  name: string
+  kind: AssemblyKind
+  materialSpecId?: string
+  widthMicron: number
+  heightMicron: number
+  depthMicron: number
+  components: AssemblyComponent[]
+}
+
+export interface CreateAssemblyComponentInput {
+  seq?: number
+  role?: string
+  kind?: ComponentKind
+  name?: string
+  materialSpecId?: string
+  quantity?: number
+  widthMicron?: number
+  heightMicron?: number
+  depthMicron?: number
+  offsetXMicron?: number
+  offsetYMicron?: number
+  offsetZMicron?: number
+}
+
+export interface CreateAssemblyInput {
+  code: string
+  name?: string
+  kind?: AssemblyKind
+  materialSpecId?: string
+  widthMicron?: number
+  heightMicron?: number
+  depthMicron?: number
+  components?: CreateAssemblyComponentInput[]
 }
 
 // ------------------------------------------------- physical stock / remnants ---
@@ -385,6 +487,7 @@ export type PlanStatus = 'draft' | 'approved' | 'accepted' | 'archived'
 export interface PlanSummary {
   id: string
   jobId?: string
+  parentPlanId?: string
   status: PlanStatus
   version: number
   name?: string
@@ -397,7 +500,164 @@ export interface PlanSummary {
 }
 
 export interface PlanDetail extends PlanSummary {
+  /** The constraints the plan was created with. */
+  rules?: Rules
   result: OptimizeResult
+}
+
+/** One hand edit of a placement. All fields except the id are optional. */
+export interface EditOperation {
+  placementId: string
+  x?: number
+  y?: number
+  rotated?: boolean
+  locked?: boolean
+  delete?: boolean
+}
+
+export interface EditPlanInput {
+  planId: string
+  operations: EditOperation[]
+  name?: string
+}
+
+export interface ReoptimizePlanInput {
+  planId: string
+  operations?: EditOperation[]
+  solver?: string
+  budgetMs?: number
+  name?: string
+}
+
+export type ExportFormat = 'csv' | 'svg' | 'dxf' | 'pdf'
+
+// ---------------------------------------------------------------- costing ---
+
+/** Cost breakdown of a plan, in the stock catalog's currency. */
+export interface CostReport {
+  newMaterialCost: number
+  remnantCost: number
+  totalStockCost: number
+  offcutCredit: number
+  /** Material actually consumed: total stock − leftovers kept in stock. */
+  netCost: number
+  partCost: number
+  trimCost: number
+  kerfCost: number
+  scrapCost: number
+  costPerPart: number
+  costPerM2: number
+}
+
+// -------------------------------------------------------------------- KPIs ---
+
+export interface KpiBucket {
+  plans: number
+  sheets: number
+  partsPlaced: number
+  remnantSheets: number
+  stockAreaM2: number
+  partAreaM2: number
+  scrapAreaM2: number
+  offcutAreaM2: number
+  yieldPct: number
+  wastePct: number
+  cost: number
+  costPerPart: number
+}
+
+export interface KpiSeriesPoint {
+  planId: string
+  createdAt: string
+  yieldPct: number
+  wastePct: number
+  cost: number
+  sheets: number
+  partsPlaced: number
+}
+
+export interface KpiReport {
+  from: string
+  to: string
+  /** Accepted plans: what the shop committed to. */
+  realized: KpiBucket
+  /** Every plan created in the window. */
+  created: KpiBucket
+  series: KpiSeriesPoint[] | null
+}
+
+// -------------------------------------------------------------- campaigns ---
+
+export type CampaignStatus = 'draft' | 'active' | 'completed' | 'cancelled'
+export type CampaignItemStatus = 'pending' | 'planned' | 'failed'
+
+export interface CampaignSummary {
+  id: string
+  code: string
+  name: string
+  status: CampaignStatus
+  budgetMs: number
+  seed: number
+  rules?: Rules
+  objective?: Objective
+  stock: StockItem[]
+  initialStock: StockItem[]
+  createdAt: string
+  updatedAt: string
+  completedAt?: string
+}
+
+export interface CampaignItem {
+  id: string
+  seq: number
+  name: string
+  parts: ProblemPart[] | null
+  dueDate?: string
+  priority: number
+  status: CampaignItemStatus
+  planId?: string
+  jobId?: string
+  error?: string
+}
+
+export interface CampaignProgress {
+  items: number
+  pending: number
+  planned: number
+}
+
+export interface CampaignDetail extends CampaignSummary {
+  items: CampaignItem[] | null
+  progress: CampaignProgress
+}
+
+export interface CreateCampaignInput {
+  code?: string
+  name: string
+  budgetMs?: number
+  seed?: number
+  rules?: Rules
+  objective?: Objective
+  stock?: StockItem[]
+  useRemnants?: boolean
+}
+
+export interface UpdateCampaignInput {
+  name?: string
+  status?: CampaignStatus
+}
+
+export interface CreateCampaignItemInput {
+  name: string
+  parts: ProblemPart[]
+  dueDate?: string
+  priority?: number
+}
+
+export interface RunCampaignNextInput {
+  campaignId: string
+  solver?: string
+  budgetMs?: number
 }
 
 export interface RemnantRef {
@@ -416,6 +676,8 @@ export interface AcceptPlanResponse {
   remnantsCreated: RemnantRef[] | null
   /** Go marshals nil slices as null. */
   stockConsumed: string[] | null
+  /** Physical pieces already consumed by another plan. */
+  stockShortages: number
   formatDecrements: number
   formatShortages: number
 }

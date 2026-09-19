@@ -12,6 +12,7 @@ import {
 import type { SheetPlan } from '@/lib/types'
 
 import { partColor } from './partColor'
+import { placementKey } from './viewerSlice'
 
 // The API speaks micrometers; the scene speaks meters (1 world unit = 1 m).
 const UM = 1e-6
@@ -32,10 +33,24 @@ export interface PlanSceneProps {
   /** 0 = compact stack, 1 = fully exploded (3D only). */
   explode: number
   onSelectPart: (partId?: string) => void
+  /** Edit mode lets pieces be dragged (2D only). */
+  editMode?: boolean
+  onMovePart?: (placementId: string, xUm: number, yUm: number) => void
 }
 
 export function PlanScene(props: PlanSceneProps) {
-  const { sheets, mode, selectedSheet, selectedPartId, showOffcuts, explode, onSelectPart } = props
+  const {
+    sheets,
+    mode,
+    selectedSheet,
+    selectedPartId,
+    showOffcuts,
+    explode,
+    onSelectPart,
+    editMode = false,
+    onMovePart,
+  } = props
+  const [dragging, setDragging] = useState(false)
 
   const visibleSheets = useMemo(
     () => (mode === '2d' ? sheets.filter((s) => s.index === selectedSheet) : sheets),
@@ -73,8 +88,15 @@ export function PlanScene(props: PlanSceneProps) {
               height={visibleSheets[0].height * UM}
             />
           )}
-          {/* Rotation stays locked so the sheet behaves like a drawing. */}
-          <OrbitControls enableRotate={false} enablePan enableZoom screenSpacePanning />
+          {/* Rotation stays locked so the sheet behaves like a drawing. While
+              a piece is dragged the controls are disabled so the drag wins. */}
+          <OrbitControls
+            enableRotate={false}
+            enablePan
+            enableZoom
+            screenSpacePanning
+            enabled={!dragging}
+          />
         </>
       ) : (
         <>
@@ -110,6 +132,9 @@ export function PlanScene(props: PlanSceneProps) {
             showOffcuts={showOffcuts}
             selectedPartId={selectedPartId}
             onSelectPart={onSelectPart}
+            editMode={editMode && mode === '2d'}
+            onMovePart={onMovePart}
+            onDragStateChange={setDragging}
           />
         )
       })}
@@ -127,6 +152,9 @@ interface SheetMeshProps {
   showOffcuts: boolean
   selectedPartId?: string
   onSelectPart: (partId?: string) => void
+  editMode: boolean
+  onMovePart?: (placementId: string, xUm: number, yUm: number) => void
+  onDragStateChange?: (dragging: boolean) => void
 }
 
 function SheetMesh({
@@ -139,6 +167,9 @@ function SheetMesh({
   showOffcuts,
   selectedPartId,
   onSelectPart,
+  editMode,
+  onMovePart,
+  onDragStateChange,
 }: SheetMeshProps) {
   const group = useRef<Group>(null)
   const plate = useRef<MeshStandardMaterial>(null)
@@ -207,10 +238,11 @@ function SheetMesh({
         const x = (pl.x + pl.w / 2) * UM - cx
         // The layout uses a top-left origin; the scene grows upwards.
         const y = cy - (pl.y + pl.h / 2) * UM
-        const selected = selectedPartId === pl.partId
+        const key = placementKey(pl)
+        const selected = selectedPartId === key
         return (
           <PartMesh
-            key={`${pl.partId}-${index}`}
+            key={pl.id ?? `${pl.partId}-${index}`}
             x={x}
             y={y}
             width={pl.w * UM}
@@ -219,7 +251,21 @@ function SheetMesh({
             selected={selected}
             highlighted={active && !selected}
             dimmed={dimmed}
-            onClick={() => onSelectPart(selected ? undefined : pl.partId)}
+            locked={editMode && !!pl.locked}
+            draggable={editMode}
+            onClick={() => onSelectPart(selected ? undefined : key)}
+            onMove={
+              onMovePart
+                ? (centerX, centerY) => {
+                    const xUm = Math.round(((centerX + cx) / UM - pl.w / 2) / 1000) * 1000
+                    const yUm = Math.round(((cy - centerY) / UM - pl.h / 2) / 1000) * 1000
+                    const maxX = Math.max(0, sheet.width - pl.w)
+                    const maxY = Math.max(0, sheet.height - pl.h)
+                    onMovePart(key, Math.min(Math.max(0, xUm), maxX), Math.min(Math.max(0, yUm), maxY))
+                  }
+                : undefined
+            }
+            onDragStateChange={onDragStateChange}
           />
         )
       })}
@@ -264,7 +310,13 @@ interface PartMeshProps {
   highlighted: boolean
   /** The part sits on a sheet that is not active and should recede. */
   dimmed: boolean
+  /** Locked placements are pinned for the next re-solve. */
+  locked?: boolean
+  draggable?: boolean
   onClick: () => void
+  /** Called with the new scene-local centre after a drag. */
+  onMove?: (centerX: number, centerY: number) => void
+  onDragStateChange?: (dragging: boolean) => void
 }
 
 function PartMesh({
@@ -276,26 +328,42 @@ function PartMesh({
   selected,
   highlighted,
   dimmed,
+  locked = false,
+  draggable = false,
   onClick,
+  onMove,
+  onDragStateChange,
 }: PartMeshProps) {
   const [hovered, setHovered] = useState(false)
+  const [preview, setPreview] = useState<[number, number] | null>(null)
+  const previewRef = useRef<[number, number] | null>(null)
+  const drag = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(
+    null,
+  )
   const material = useRef<MeshStandardMaterial>(null)
   const emissive = useRef(new Color('#000000'))
 
   useEffect(() => {
-    document.body.style.cursor = hovered ? 'pointer' : 'auto'
+    document.body.style.cursor = drag.current
+      ? 'grabbing'
+      : hovered
+        ? draggable
+          ? 'grab'
+          : 'pointer'
+        : 'auto'
     return () => {
       document.body.style.cursor = 'auto'
     }
-  }, [hovered])
+  }, [hovered, draggable])
 
   useFrame((_, delta) => {
     const m = material.current
     if (!m) return
     const k = 1 - Math.exp(-9 * delta)
-    emissive.current.set(selected ? SELECTED : hovered || highlighted ? HIGHLIGHT : '#000000')
+    const base = locked ? '#10b981' : '#000000'
+    emissive.current.set(selected ? SELECTED : hovered || highlighted ? HIGHLIGHT : base)
     m.emissive.lerp(emissive.current, k)
-    const intensity = selected ? 0.8 : hovered ? 0.55 : highlighted ? 0.28 : 0
+    const intensity = selected ? 0.8 : hovered ? 0.55 : highlighted ? 0.28 : locked ? 0.4 : 0
     m.emissiveIntensity += (intensity - m.emissiveIntensity) * k
     const opacity = dimmed && !selected ? 0.3 : 1
     m.opacity += (opacity - m.opacity) * k
@@ -306,10 +374,48 @@ function PartMesh({
     onClick()
   }
 
+  const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+    if (!draggable || !onMove || event.button !== 0) return
+    event.stopPropagation()
+    const target = event.target as Element | null
+    target?.setPointerCapture?.(event.pointerId)
+    drag.current = { startX: event.point.x, startY: event.point.y, originX: x, originY: y }
+    previewRef.current = [x, y]
+    setPreview([x, y])
+    onDragStateChange?.(true)
+  }
+
+  const handlePointerMove = (event: ThreeEvent<PointerEvent>) => {
+    if (!drag.current) return
+    event.stopPropagation()
+    const next: [number, number] = [
+      drag.current.originX + (event.point.x - drag.current.startX),
+      drag.current.originY + (event.point.y - drag.current.startY),
+    ]
+    previewRef.current = next
+    setPreview(next)
+  }
+
+  const handlePointerUp = (event: ThreeEvent<PointerEvent>) => {
+    if (!drag.current) return
+    event.stopPropagation()
+    const [px, py] = previewRef.current ?? [x, y]
+    drag.current = null
+    previewRef.current = null
+    setPreview(null)
+    onDragStateChange?.(false)
+    onMove?.(px, py)
+  }
+
+  const [positionX, positionY] = preview ?? [x, y]
+
   return (
     <mesh
-      position={[x, y, VIS_THICKNESS * 0.35]}
+      position={[positionX, positionY, VIS_THICKNESS * 0.35]}
       onClick={handleClick}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
       onPointerOver={(event) => {
         event.stopPropagation()
         setHovered(true)

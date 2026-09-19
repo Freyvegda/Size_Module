@@ -11,9 +11,17 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { useAppDispatch, useAppSelector } from '@/app/hooks'
 import { fetchBackend } from '@/features/backend/backendSlice'
+import { fetchKpis } from '@/features/kpis/kpiSlice'
 import {
   loadBarDemoPlan,
   loadDemoPlan,
@@ -21,16 +29,32 @@ import {
 } from '@/features/optimizer/optimizerSlice'
 import { SolverBadges } from '@/features/optimizer/SolverBadges'
 import { percent } from '@/lib/format'
+import type { KpiSeriesPoint } from '@/lib/types'
 
 export function DashboardPage() {
   const dispatch = useAppDispatch()
   const navigate = useNavigate()
   const backend = useAppSelector((state) => state.backend)
   const optimizer = useAppSelector((state) => state.optimizer)
+  const kpis = useAppSelector((state) => state.kpis)
+  const databaseUp = backend.health?.db === 'up'
 
   useEffect(() => {
     void dispatch(fetchBackend())
   }, [dispatch])
+
+  useEffect(() => {
+    if (databaseUp && kpis.status === 'idle') {
+      void dispatch(fetchKpis(kpis.days))
+    }
+  }, [dispatch, databaseUp, kpis.status, kpis.days])
+
+  const refresh = () => {
+    void dispatch(fetchBackend())
+    if (databaseUp) {
+      void dispatch(fetchKpis(kpis.days))
+    }
+  }
 
   const runDemo = async () => {
     const action = await dispatch(runDemoOptimization({ profile: '2d' }))
@@ -66,9 +90,9 @@ export function DashboardPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => dispatch(fetchBackend())}>
+          <Button variant="outline" onClick={refresh}>
             <RefreshCw className="mr-2 h-4 w-4" />
-            Refresh status
+            Refresh
           </Button>
           <Button variant="outline" onClick={loadPlan}>
             <Upload className="mr-2 h-4 w-4" />
@@ -89,6 +113,111 @@ export function DashboardPage() {
           </CardHeader>
         </Card>
       )}
+
+      <Card>
+        <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle>Realized yield</CardTitle>
+            <CardDescription>
+              Accepted plans — what the shop committed to — and everything planned in the window.
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            <Select
+              value={String(kpis.days)}
+              onValueChange={(value) => dispatch(fetchKpis(Number(value)))}
+            >
+              <SelectTrigger className="w-[130px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="30">Last 30 days</SelectItem>
+                <SelectItem value="90">Last 90 days</SelectItem>
+                <SelectItem value="365">Last 365 days</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!databaseUp ? (
+            <p className="text-sm text-muted-foreground">
+              KPIs are aggregated from accepted plans and need PostgreSQL. Start it with{' '}
+              <code>db/scripts/up.ps1</code>.
+            </p>
+          ) : kpis.error ? (
+            <p className="text-sm text-destructive">{kpis.error}</p>
+          ) : !kpis.report ? (
+            <p className="text-sm text-muted-foreground">
+              {kpis.status === 'loading' ? 'Loading KPIs…' : 'No KPI data yet.'}
+            </p>
+          ) : (
+            <>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <Kpi
+                  label="Realized yield"
+                  value={percent(kpis.report.realized.yieldPct)}
+                  hint={`${kpis.report.realized.plans} accepted plan(s)`}
+                  tone="good"
+                />
+                <Kpi
+                  label="Realized waste"
+                  value={percent(kpis.report.realized.wastePct)}
+                  hint={`${kpis.report.realized.scrapAreaM2.toFixed(1)} m² scrap`}
+                  tone={kpis.report.realized.wastePct > 30 ? 'bad' : undefined}
+                />
+                <Kpi
+                  label="Stock value"
+                  value={kpis.report.realized.cost.toFixed(2)}
+                  hint={
+                    kpis.report.realized.partsPlaced > 0
+                      ? `${kpis.report.realized.costPerPart.toFixed(2)} / part`
+                      : 'no parts placed'
+                  }
+                />
+                <Kpi
+                  label="Remnants used"
+                  value={String(kpis.report.realized.remnantSheets)}
+                  hint={`of ${kpis.report.realized.sheets} sheets`}
+                />
+                <Kpi
+                  label="Parts produced"
+                  value={String(kpis.report.realized.partsPlaced)}
+                  hint={`${kpis.report.realized.partAreaM2.toFixed(1)} m² of parts`}
+                />
+                <Kpi
+                  label="Offcuts kept"
+                  value={`${kpis.report.realized.offcutAreaM2.toFixed(1)} m²`}
+                  hint="back in circulation"
+                />
+                <Kpi
+                  label="Plans created"
+                  value={String(kpis.report.created.plans)}
+                  hint={`pipeline yield ${percent(kpis.report.created.yieldPct)}`}
+                />
+                <Kpi
+                  label="Pipeline value"
+                  value={kpis.report.created.cost.toFixed(2)}
+                  hint={`${kpis.report.created.sheets} sheet(s) planned`}
+                />
+              </div>
+
+              {(kpis.report.series ?? []).length > 0 && (
+                <div>
+                  <div className="mb-1 text-xs text-muted-foreground">
+                    Accepted plans, oldest to newest — bar height is yield %, darker means more
+                    waste
+                  </div>
+                  <div className="flex h-24 items-end gap-1">
+                    {(kpis.report.series ?? []).map((point) => (
+                      <YieldBar key={point.planId} point={point} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Card>
@@ -202,5 +331,42 @@ function Line({ label, value }: { label: string; value: string }) {
       <span className="text-muted-foreground">{label}</span>
       <span className="font-medium">{value}</span>
     </div>
+  )
+}
+
+function Kpi({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  label: string
+  value: string
+  hint?: string
+  tone?: 'good' | 'bad'
+}) {
+  const toneClass =
+    tone === 'good' ? 'text-emerald-500' : tone === 'bad' ? 'text-amber-500' : 'text-foreground'
+  return (
+    <div className="rounded-md border border-border p-3">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className={`mt-1 text-2xl font-semibold ${toneClass}`}>{value}</div>
+      {hint && <div className="mt-1 text-xs text-muted-foreground">{hint}</div>}
+    </div>
+  )
+}
+
+/** One accepted plan on the yield trend line. */
+function YieldBar({ point }: { point: KpiSeriesPoint }) {
+  const height = Math.max(4, Math.min(100, point.yieldPct))
+  return (
+    <div
+      className="min-w-[6px] flex-1 rounded-t-sm bg-sky-500"
+      style={{
+        height: `${height}%`,
+        opacity: 0.45 + Math.min(0.55, point.wastePct / 100),
+      }}
+      title={`${new Date(point.createdAt).toLocaleDateString()} · yield ${point.yieldPct.toFixed(1)}% · waste ${point.wastePct.toFixed(1)}% · ${point.sheets} sheet(s) · ${point.partsPlaced} part(s)`}
+    />
   )
 }

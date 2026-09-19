@@ -22,19 +22,41 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useAppDispatch, useAppSelector } from '@/app/hooks'
-import { createMaterial, fetchMaterials } from '@/features/catalog/catalogSlice'
+import {
+  createMaterial,
+  createMaterialSpec,
+  fetchMaterials,
+  fetchMaterialSpecs,
+} from '@/features/catalog/catalogSlice'
+import { micronToMm, mmToMicron } from '@/lib/format'
 import type { DimensionProfile } from '@/lib/types'
 
 export function MaterialsPage() {
   const dispatch = useAppDispatch()
-  const { materials, materialsStatus, materialsError, createMaterialStatus, createMaterialError } =
-    useAppSelector((state) => state.catalog)
+  const {
+    materials,
+    materialsStatus,
+    materialsError,
+    createMaterialStatus,
+    createMaterialError,
+    materialSpecs,
+    materialSpecsError,
+    createMaterialSpecStatus,
+    createMaterialSpecError,
+  } = useAppSelector((state) => state.catalog)
   const [code, setCode] = useState('')
   const [name, setName] = useState('')
   const [profile, setProfile] = useState<DimensionProfile>('2d')
+  const [specMaterialId, setSpecMaterialId] = useState('')
+  const [specCode, setSpecCode] = useState('')
+  const [specName, setSpecName] = useState('')
+  const [specThickness, setSpecThickness] = useState('')
+  const [specFinish, setSpecFinish] = useState('')
+  const [specColor, setSpecColor] = useState('')
 
   useEffect(() => {
     void dispatch(fetchMaterials())
+    void dispatch(fetchMaterialSpecs())
   }, [dispatch])
 
   const submit = async (event: FormEvent) => {
@@ -50,7 +72,31 @@ export function MaterialsPage() {
     }
   }
 
+  const submitSpec = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!specMaterialId || !specCode.trim()) return
+    const action = await dispatch(
+      createMaterialSpec({
+        materialId: specMaterialId,
+        code: specCode.trim(),
+        name: specName.trim() || undefined,
+        thicknessMicron: mmToMicron(Number(specThickness) || 0),
+        finish: specFinish.trim() || undefined,
+        color: specColor.trim() || undefined,
+      }),
+    )
+    if (createMaterialSpec.fulfilled.match(action)) {
+      setSpecCode('')
+      setSpecName('')
+      setSpecThickness('')
+      setSpecFinish('')
+      setSpecColor('')
+    }
+  }
+
   const loading = materialsStatus === 'loading'
+  const familyName = (materialId: string) =>
+    materials.find((material) => material.id === materialId)?.name ?? '—'
 
   return (
     <div className="space-y-4">
@@ -178,6 +224,145 @@ export function MaterialsPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Types</CardTitle>
+          <CardDescription>
+            Material types (specs) — the concrete boards and profiles you can stock and build from.{' '}
+            {materialSpecs.length} type(s) from /api/v1/material-specs.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div>
+              {materialSpecsError ? (
+                <div className="rounded-md border border-destructive/40 bg-destructive/5 p-4 text-sm">
+                  <div className="font-medium text-destructive">Database not reachable</div>
+                  <p className="mt-1 text-muted-foreground">{materialSpecsError}</p>
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Family</TableHead>
+                      <TableHead>Code</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Thickness</TableHead>
+                      <TableHead>Finish</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {materialSpecs.map((spec) => (
+                      <TableRow key={spec.id}>
+                        <TableCell>{spec.materialName || familyName(spec.materialId)}</TableCell>
+                        <TableCell className="font-medium">{spec.code}</TableCell>
+                        <TableCell>{spec.name || '—'}</TableCell>
+                        <TableCell>
+                          {spec.thicknessMicron > 0 ? `${micronToMm(spec.thicknessMicron)} mm` : '—'}
+                        </TableCell>
+                        <TableCell>{spec.finish || '—'}</TableCell>
+                      </TableRow>
+                    ))}
+                    {materialSpecs.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center text-sm text-muted-foreground">
+                          No types yet. Add one on the right.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+
+            <form className="space-y-3" onSubmit={submitSpec}>
+              <div className="space-y-1.5">
+                <Label>Family</Label>
+                <Select
+                  value={specMaterialId || 'none'}
+                  onValueChange={(value) => setSpecMaterialId(value === 'none' ? '' : value)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Choose…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Choose a family…</SelectItem>
+                    {materials.map((material) => (
+                      <SelectItem key={material.id} value={material.id}>
+                        {material.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="spec-code">Code</Label>
+                  <Input
+                    id="spec-code"
+                    value={specCode}
+                    onChange={(event) => setSpecCode(event.target.value)}
+                    placeholder="OAK-18"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="spec-name">Name</Label>
+                  <Input
+                    id="spec-name"
+                    value={specName}
+                    onChange={(event) => setSpecName(event.target.value)}
+                    placeholder="Oak 18 mm"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="spec-thickness">Thickness (mm)</Label>
+                  <Input
+                    id="spec-thickness"
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={specThickness}
+                    onChange={(event) => setSpecThickness(event.target.value)}
+                    placeholder="18"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="spec-finish">Finish</Label>
+                  <Input
+                    id="spec-finish"
+                    value={specFinish}
+                    onChange={(event) => setSpecFinish(event.target.value)}
+                    placeholder="sanded"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="spec-color">Colour</Label>
+                <Input
+                  id="spec-color"
+                  value={specColor}
+                  onChange={(event) => setSpecColor(event.target.value)}
+                  placeholder="natural"
+                />
+              </div>
+              <Button
+                type="submit"
+                disabled={!specMaterialId || !specCode.trim() || createMaterialSpecStatus === 'loading'}
+                className="w-full"
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                {createMaterialSpecStatus === 'loading' ? 'Creating…' : 'Add type'}
+              </Button>
+              {createMaterialSpecError && (
+                <p className="text-xs text-destructive">{createMaterialSpecError}</p>
+              )}
+            </form>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

@@ -25,13 +25,16 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useAppDispatch, useAppSelector } from '@/app/hooks'
 import {
+  createStockFormat,
   createStockPiece,
+  fetchMaterials,
+  fetchMaterialSpecs,
   fetchStockFormats,
   fetchStockItems,
   updateStockPiece,
 } from '@/features/catalog/catalogSlice'
 import { micronToMm, mmToMicron } from '@/lib/format'
-import type { StockItemStatus, StockPiece } from '@/lib/types'
+import type { Material, MaterialSpec, StockItemStatus, StockPiece } from '@/lib/types'
 
 const statusVariants: Record<StockItemStatus, 'default' | 'secondary' | 'outline' | 'destructive'> = {
   available: 'default',
@@ -43,6 +46,8 @@ const statusVariants: Record<StockItemStatus, 'default' | 'secondary' | 'outline
 export function StockPage() {
   const dispatch = useAppDispatch()
   const {
+    materials,
+    materialSpecs,
     stockFormats: formats,
     stockStatus,
     stockError,
@@ -51,6 +56,8 @@ export function StockPage() {
     stockItemsError,
     createStockPieceStatus,
     createStockPieceError,
+    createStockFormatStatus,
+    createStockFormatError,
     updateStockPieceStatus,
     updateStockPieceError,
   } = useAppSelector((state) => state.catalog)
@@ -58,6 +65,8 @@ export function StockPage() {
 
   useEffect(() => {
     void dispatch(fetchStockFormats())
+    void dispatch(fetchMaterials())
+    void dispatch(fetchMaterialSpecs())
   }, [dispatch])
 
   useEffect(() => {
@@ -67,6 +76,8 @@ export function StockPage() {
   const loading = stockStatus === 'loading' || stockItemsStatus === 'loading'
   const refresh = () => {
     void dispatch(fetchStockFormats())
+    void dispatch(fetchMaterials())
+    void dispatch(fetchMaterialSpecs())
     void dispatch(fetchStockItems(statusFilter === 'all' ? undefined : { status: statusFilter }))
   }
 
@@ -93,6 +104,7 @@ export function StockPage() {
         </TabsList>
 
         <TabsContent value="formats">
+          <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
           <Card>
             <CardHeader>
               <CardTitle>Formats</CardTitle>
@@ -150,6 +162,13 @@ export function StockPage() {
               )}
             </CardContent>
           </Card>
+            <AddStockFormatCard
+              materials={materials}
+              specs={materialSpecs}
+              status={createStockFormatStatus}
+              error={createStockFormatError}
+            />
+          </div>
         </TabsContent>
 
         <TabsContent value="pieces">
@@ -430,6 +449,203 @@ function RegisterPieceCard({ formats, status, error }: RegisterPieceCardProps) {
         {error && <p className="text-sm text-destructive">{error}</p>}
         <Button className="w-full" disabled={!valid || status === 'loading'} onClick={submit}>
           {status === 'loading' ? 'Registering…' : 'Register piece'}
+        </Button>
+      </CardContent>
+    </Card>
+  )
+}
+
+interface AddStockFormatCardProps {
+  materials: Material[]
+  specs: MaterialSpec[]
+  status: 'idle' | 'loading' | 'ready' | 'error'
+  error?: string
+}
+
+function AddStockFormatCard({ materials, specs, status, error }: AddStockFormatCardProps) {
+  const dispatch = useAppDispatch()
+  const [materialId, setMaterialId] = useState('')
+  const [specId, setSpecId] = useState('')
+  const [code, setCode] = useState('')
+  const [length, setLength] = useState('')
+  const [width, setWidth] = useState('')
+  const [height, setHeight] = useState('')
+  const [qty, setQty] = useState('1')
+  const [cost, setCost] = useState('')
+
+  const familySpecs = specs.filter((spec) => spec.materialId === materialId)
+  const spec = specs.find((item) => item.id === specId)
+  const profile = spec?.dimensionProfile ?? '2d'
+
+  const valid =
+    !!specId &&
+    code.trim().length > 0 &&
+    (profile === '1d' ? Number(length) > 0 : Number(width) > 0 && Number(height) > 0)
+
+  const submit = () => {
+    void dispatch(
+      createStockFormat({
+        materialSpecId: specId,
+        code: code.trim(),
+        ...(profile === '1d'
+          ? {
+              lengthMicron: mmToMicron(Number(length) || 0),
+              widthMicron: mmToMicron(Number(width) || 0),
+            }
+          : {
+              widthMicron: mmToMicron(Number(width) || 0),
+              heightMicron: mmToMicron(Number(height) || 0),
+            }),
+        onHandQty: Math.max(0, Math.round(Number(qty) || 0)),
+        costPerUnit: Math.max(0, Number(cost) || 0),
+      }),
+    ).then((action) => {
+      if (createStockFormat.fulfilled.match(action)) {
+        setCode('')
+        setLength('')
+        setWidth('')
+        setHeight('')
+        setQty('1')
+        setCost('')
+      }
+    })
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Add stock</CardTitle>
+        <CardDescription>POST /api/v1/stock-formats — a size the solver can buy</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="space-y-1.5">
+          <Label>Material</Label>
+          <Select
+            value={materialId || 'none'}
+            onValueChange={(value) => {
+              const id = value === 'none' ? '' : value
+              setMaterialId(id)
+              const first = specs.find((item) => item.materialId === id)
+              setSpecId(first?.id ?? '')
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Choose…" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">Choose a material…</SelectItem>
+              {materials.map((material) => (
+                <SelectItem key={material.id} value={material.id}>
+                  {material.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Type</Label>
+          <Select
+            value={specId || 'none'}
+            onValueChange={(value) => setSpecId(value === 'none' ? '' : value)}
+            disabled={!materialId}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Choose…" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">Choose a type…</SelectItem>
+              {familySpecs.map((item) => (
+                <SelectItem key={item.id} value={item.id}>
+                  {item.name || item.code}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="format-code">Code</Label>
+          <Input
+            id="format-code"
+            value={code}
+            onChange={(event) => setCode(event.target.value)}
+            placeholder="SHEET-OAK-2440x1220"
+          />
+        </div>
+        {profile === '1d' ? (
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="format-length">Length (mm)</Label>
+              <Input
+                id="format-length"
+                inputMode="decimal"
+                value={length}
+                onChange={(event) => setLength(event.target.value)}
+                placeholder="6000"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="format-section">Section (mm)</Label>
+              <Input
+                id="format-section"
+                inputMode="decimal"
+                value={width}
+                onChange={(event) => setWidth(event.target.value)}
+                placeholder="60"
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="format-width">Width (mm)</Label>
+              <Input
+                id="format-width"
+                inputMode="decimal"
+                value={width}
+                onChange={(event) => setWidth(event.target.value)}
+                placeholder="2440"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="format-height">Height (mm)</Label>
+              <Input
+                id="format-height"
+                inputMode="decimal"
+                value={height}
+                onChange={(event) => setHeight(event.target.value)}
+                placeholder="1220"
+              />
+            </div>
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="format-qty">On hand</Label>
+            <Input
+              id="format-qty"
+              type="number"
+              min="0"
+              step="1"
+              value={qty}
+              onChange={(event) => setQty(event.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="format-cost">Cost / unit</Label>
+            <Input
+              id="format-cost"
+              type="number"
+              min="0"
+              step="0.01"
+              value={cost}
+              onChange={(event) => setCost(event.target.value)}
+              placeholder="48.00"
+            />
+          </div>
+        </div>
+        {error && <p className="text-sm text-destructive">{error}</p>}
+        <Button className="w-full" disabled={!valid || status === 'loading'} onClick={submit}>
+          {status === 'loading' ? 'Adding…' : 'Add stock format'}
         </Button>
       </CardContent>
     </Card>

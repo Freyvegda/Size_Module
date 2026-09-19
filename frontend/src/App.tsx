@@ -1,11 +1,14 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import { AppShell } from '@/components/layout/AppShell'
+import { CampaignDetailPage } from '@/pages/CampaignDetailPage'
+import { CampaignsPage } from '@/pages/CampaignsPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { JobsPage } from '@/pages/JobsPage'
 import { MaterialsPage } from '@/pages/MaterialsPage'
 import { PartsPage } from '@/pages/PartsPage'
 import { PlanViewerPage } from '@/pages/PlanViewerPage'
+import { ProductsPage } from '@/pages/ProductsPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { StockPage } from '@/pages/StockPage'
 
@@ -17,8 +20,11 @@ export default function App() {
         <Route path="viewer" element={<PlanViewerPage />} />
         <Route path="materials" element={<MaterialsPage />} />
         <Route path="parts" element={<PartsPage />} />
+        <Route path="products" element={<ProductsPage />} />
         <Route path="stock" element={<StockPage />} />
         <Route path="jobs" element={<JobsPage />} />
+        <Route path="campaigns" element={<CampaignsPage />} />
+        <Route path="campaigns/:id" element={<CampaignDetailPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

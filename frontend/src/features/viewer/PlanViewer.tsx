@@ -1,21 +1,35 @@
 import { Suspense, lazy } from 'react'
+import { Download, Lock, Pencil, RefreshCw, RotateCw, Save, Trash2, Unlock, X } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useAppDispatch, useAppSelector } from '@/app/hooks'
+import {
+  editPlan,
+  loadPlanDetail,
+  reoptimizePlan,
+} from '@/features/optimizer/optimizerSlice'
 import { micronToMm, percent } from '@/lib/format'
-import type { SheetPlan } from '@/lib/types'
+import type { ExportFormat, SheetPlan } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { BarPlanView } from './BarPlanView'
 import {
+  beginEdit,
+  deletePart,
+  endEdit,
+  movePart,
+  placementKey,
+  rotatePart,
   selectPart,
   selectSheet,
   setExplode,
   setMode,
+  toggleLockPart,
   toggleOffcuts,
   type ViewMode,
 } from './viewerSlice'
@@ -38,9 +52,13 @@ export function PlanViewer() {
   const result = useAppSelector((state) => state.optimizer.result)
   const source = useAppSelector((state) => state.optimizer.source)
   const dimension = useAppSelector((state) => state.optimizer.dimension)
+  const lastPlanId = useAppSelector((state) => state.optimizer.lastPlanId)
+  const planEditStatus = useAppSelector((state) => state.optimizer.planEditStatus)
+  const planEditError = useAppSelector((state) => state.optimizer.planEditError)
   const { mode, selectedSheet, selectedPartId, showOffcuts, explode } = useAppSelector(
     (state) => state.viewer,
   )
+  const { editing, draftSheets, pendingOps } = useAppSelector((state) => state.viewer)
 
   if (!result) {
     return (
@@ -57,13 +75,51 @@ export function PlanViewer() {
 
   const isLengthPlan = dimension === '1d'
   const solution = result.solution
-  const sheets = solution.sheets ?? []
+  const savedSheets = solution.sheets ?? []
+  const sheets = editing && draftSheets ? draftSheets : savedSheets
   const unplaced = solution.unplaced ?? []
   const activeSheet = sheets.find((sheet) => sheet.index === selectedSheet) ?? sheets[0]
-  const activePart = activeSheet?.placements.find((placement) => placement.partId === selectedPartId)
+  const activePart = activeSheet?.placements.find(
+    (placement) => placementKey(placement) === selectedPartId,
+  )
   const metrics = solution.metrics
   const cutSteps = activeSheet?.cutSteps ?? []
   const notes = solution.notes ?? []
+
+  const exportUrl = (format: ExportFormat) =>
+    `/api/v1/plans/${lastPlanId}/exports?format=${format}`
+
+  const startEditing = () => {
+    if (!lastPlanId) return
+    void dispatch(loadPlanDetail(lastPlanId))
+      .unwrap()
+      .then((detail) => dispatch(beginEdit(detail.result.solution.sheets ?? [])))
+      .catch(() => {
+        // loadPlanDetail already recorded the error in the optimizer slice.
+      })
+  }
+
+  const saveEdits = () => {
+    if (!lastPlanId) return
+    void dispatch(
+      editPlan({ planId: lastPlanId, operations: pendingOps, name: 'Edited plan' }),
+    ).then((action) => {
+      if (editPlan.fulfilled.match(action)) dispatch(endEdit())
+    })
+  }
+
+  const resolvePlan = () => {
+    if (!lastPlanId) return
+    void dispatch(
+      reoptimizePlan({
+        planId: lastPlanId,
+        operations: pendingOps.length > 0 ? pendingOps : undefined,
+        name: 'Re-solved plan',
+      }),
+    ).then((action) => {
+      if (reoptimizePlan.fulfilled.match(action)) dispatch(endEdit())
+    })
+  }
 
   return (
     <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_330px]">
@@ -78,7 +134,7 @@ export function PlanViewer() {
               </CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              {!isLengthPlan && (
+              {!isLengthPlan && !editing && (
                 <ToggleGroup
                   type="single"
                   value={mode}
@@ -94,7 +150,7 @@ export function PlanViewer() {
                 Offcuts
                 <Switch checked={showOffcuts} onCheckedChange={() => dispatch(toggleOffcuts())} />
               </label>
-              {!isLengthPlan && mode === '3d' && (
+              {!isLengthPlan && !editing && mode === '3d' && (
                 <label className="flex items-center gap-2 text-xs text-muted-foreground">
                   Explode
                   <input
@@ -110,6 +166,59 @@ export function PlanViewer() {
               )}
             </div>
           </CardHeader>
+
+          {lastPlanId && (
+            <div className="flex flex-wrap items-center gap-2 border-t border-border px-6 py-3">
+              {!editing ? (
+                <>
+                  {!isLengthPlan && (
+                    <Button variant="outline" size="sm" onClick={startEditing}>
+                      <Pencil className="mr-2 h-3.5 w-3.5" />
+                      Edit layout
+                    </Button>
+                  )}
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Download className="h-3.5 w-3.5" />
+                    Export
+                  </span>
+                  {(['csv', 'svg', 'dxf', 'pdf'] as ExportFormat[]).map((format) => (
+                    <Button key={format} variant="outline" size="sm" asChild>
+                      <a href={exportUrl(format)} download>
+                        {format.toUpperCase()}
+                      </a>
+                    </Button>
+                  ))}
+                </>
+              ) : (
+                <>
+                  <Badge variant="secondary">
+                    editing · {pendingOps.length} change{pendingOps.length === 1 ? '' : 's'}
+                  </Badge>
+                  <Button size="sm" onClick={saveEdits} disabled={planEditStatus === 'loading' || pendingOps.length === 0}>
+                    <Save className="mr-2 h-3.5 w-3.5" />
+                    {planEditStatus === 'loading' ? 'Working…' : 'Save edits'}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={resolvePlan} disabled={planEditStatus === 'loading'}>
+                    <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                    Re-solve with locks
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => dispatch(endEdit())} disabled={planEditStatus === 'loading'}>
+                    <X className="mr-2 h-3.5 w-3.5" />
+                    Cancel
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    Drag a piece to move it; lock pieces to keep them on re-solve.
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+          {planEditError && (
+            <div className="border-t border-destructive/40 bg-destructive/5 px-6 py-2 text-xs text-destructive">
+              {planEditError}
+            </div>
+          )}
+
           <CardContent className="px-0 pb-0">
             {isLengthPlan ? (
               <div className="border-t border-border">
@@ -136,12 +245,16 @@ export function PlanViewer() {
                 >
                   <PlanScene
                     sheets={sheets}
-                    mode={mode}
+                    mode={editing ? '2d' : mode}
                     selectedSheet={activeSheet?.index ?? 0}
                     selectedPartId={selectedPartId}
                     showOffcuts={showOffcuts}
                     explode={explode}
                     onSelectPart={(partId) => dispatch(selectPart(partId))}
+                    editMode={editing}
+                    onMovePart={(placementId, x, y) =>
+                      dispatch(movePart({ placementId, x, y }))
+                    }
                   />
                 </Suspense>
               </div>
@@ -239,6 +352,17 @@ export function PlanViewer() {
             <Metric label="Cost" value={metrics.cost.toFixed(2)} />
             <Metric label="Solve time" value={`${metrics.elapsedMs} ms`} />
             <Metric label="Score" value={result.score.toFixed(2)} />
+            {result.cost && (
+              <div className="col-span-2 space-y-1 border-t border-border pt-3">
+                <div className="text-xs font-medium text-muted-foreground">Cost breakdown</div>
+                <Row label="New material" value={result.cost.newMaterialCost.toFixed(2)} />
+                <Row label="Remnants taken" value={result.cost.remnantCost.toFixed(2)} />
+                <Row label="Offcut credit" value={`−${result.cost.offcutCredit.toFixed(2)}`} />
+                <Row label="Net cost" value={result.cost.netCost.toFixed(2)} />
+                <Row label="Cost / part" value={result.cost.costPerPart.toFixed(2)} />
+                <Row label="Cost / m²" value={result.cost.costPerM2.toFixed(2)} />
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -292,7 +416,10 @@ export function PlanViewer() {
           <Card className="animate-in fade-in slide-in-from-bottom-1 duration-300">
             <CardHeader>
               <CardTitle>Selected piece</CardTitle>
-              <CardDescription>{activePart.partCode}</CardDescription>
+              <CardDescription>
+                {activePart.partCode}
+                {activePart.locked ? ' · locked' : ''}
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-1 text-sm">
               {isLengthPlan ? (
@@ -308,6 +435,38 @@ export function PlanViewer() {
                 value={`x ${micronToMm(activePart.x)}${isLengthPlan ? '' : ` / y ${micronToMm(activePart.y)}`} mm`}
               />
               {!isLengthPlan && <Row label="Rotated" value={activePart.rotated ? 'yes' : 'no'} />}
+              {editing && !isLengthPlan && activePart.id && (
+                <div className="flex flex-wrap gap-2 pt-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => dispatch(rotatePart({ placementId: activePart.id! }))}
+                  >
+                    <RotateCw className="mr-1.5 h-3.5 w-3.5" />
+                    Rotate
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => dispatch(toggleLockPart({ placementId: activePart.id! }))}
+                  >
+                    {activePart.locked ? (
+                      <Unlock className="mr-1.5 h-3.5 w-3.5" />
+                    ) : (
+                      <Lock className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    {activePart.locked ? 'Unlock' : 'Lock'}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => dispatch(deletePart({ placementId: activePart.id! }))}
+                  >
+                    <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                    Delete
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}

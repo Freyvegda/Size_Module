@@ -94,6 +94,8 @@ export function PlanViewerPage() {
                 `, ${acceptResult.formatShortages} without on-hand stock to decrement`}
               {acceptResult.stockConsumed && acceptResult.stockConsumed.length > 0 &&
                 `, ${acceptResult.stockConsumed.length} physical piece(s) consumed`}
+              {acceptResult.stockShortages > 0 &&
+                `; ${acceptResult.stockShortages} piece(s) were already gone`}
               .
             </CardDescription>
           </CardHeader>

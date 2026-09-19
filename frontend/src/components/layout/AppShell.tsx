@@ -1,8 +1,10 @@
 import { useEffect } from 'react'
 import {
   Boxes,
+  CalendarRange,
   Eye,
   LayoutDashboard,
+  LayoutGrid,
   Layers,
   Play,
   Settings,
@@ -21,8 +23,10 @@ const navigation = [
   { to: '/viewer', label: 'Plan viewer', icon: Eye },
   { to: '/materials', label: 'Materials', icon: Layers },
   { to: '/parts', label: 'Parts', icon: SquareStack },
+  { to: '/products', label: 'Products', icon: LayoutGrid },
   { to: '/stock', label: 'Stock', icon: Boxes },
   { to: '/jobs', label: 'Jobs', icon: Play },
+  { to: '/campaigns', label: 'Campaigns', icon: CalendarRange },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 

@@ -3,10 +3,13 @@ import { createAsyncThunk, createSlice } from '@reduxjs/toolkit'
 import { api } from '@/lib/api'
 import type {
   CreateMaterialInput,
+  CreateMaterialSpecInput,
   CreatePartInput,
+  CreateStockFormatInput,
   CreateStockPieceInput,
   FetchStockItemsArgs,
   Material,
+  MaterialSpec,
   Part,
   StockFormat,
   StockPiece,
@@ -21,6 +24,13 @@ interface CatalogState {
   materialsError?: string
   createMaterialStatus: RequestStatus
   createMaterialError?: string
+  materialSpecs: MaterialSpec[]
+  materialSpecsStatus: RequestStatus
+  materialSpecsError?: string
+  createMaterialSpecStatus: RequestStatus
+  createMaterialSpecError?: string
+  createStockFormatStatus: RequestStatus
+  createStockFormatError?: string
   parts: Part[]
   partsStatus: RequestStatus
   partsError?: string
@@ -42,6 +52,10 @@ const initialState: CatalogState = {
   materials: [],
   materialsStatus: 'idle',
   createMaterialStatus: 'idle',
+  materialSpecs: [],
+  materialSpecsStatus: 'idle',
+  createMaterialSpecStatus: 'idle',
+  createStockFormatStatus: 'idle',
   parts: [],
   partsStatus: 'idle',
   createPartStatus: 'idle',
@@ -63,6 +77,23 @@ export const fetchMaterials = createAsyncThunk('catalog/fetchMaterials', async (
 export const createMaterial = createAsyncThunk(
   'catalog/createMaterial',
   async (input: CreateMaterialInput) => api.post<Material>('/api/v1/materials', input),
+)
+
+// ----------------------------------------------------------- material specs ---
+
+export const fetchMaterialSpecs = createAsyncThunk('catalog/fetchMaterialSpecs', async () => {
+  const response = await api.get<{ materialSpecs: MaterialSpec[] }>('/api/v1/material-specs')
+  return response.materialSpecs ?? []
+})
+
+export const createMaterialSpec = createAsyncThunk(
+  'catalog/createMaterialSpec',
+  async (input: CreateMaterialSpecInput) => api.post<MaterialSpec>('/api/v1/material-specs', input),
+)
+
+export const createStockFormat = createAsyncThunk(
+  'catalog/createStockFormat',
+  async (input: CreateStockFormatInput) => api.post<StockFormat>('/api/v1/stock-formats', input),
 )
 
 // ------------------------------------------------------------------- parts ---
@@ -137,6 +168,42 @@ const catalogSlice = createSlice({
       .addCase(createMaterial.rejected, (state, action) => {
         state.createMaterialStatus = 'error'
         state.createMaterialError = action.error.message ?? 'Could not create material'
+      })
+      .addCase(fetchMaterialSpecs.pending, (state) => {
+        state.materialSpecsStatus = 'loading'
+        state.materialSpecsError = undefined
+      })
+      .addCase(fetchMaterialSpecs.fulfilled, (state, action) => {
+        state.materialSpecsStatus = 'ready'
+        state.materialSpecs = action.payload
+      })
+      .addCase(fetchMaterialSpecs.rejected, (state, action) => {
+        state.materialSpecsStatus = 'error'
+        state.materialSpecsError = action.error.message ?? 'Could not load material types'
+      })
+      .addCase(createMaterialSpec.pending, (state) => {
+        state.createMaterialSpecStatus = 'loading'
+        state.createMaterialSpecError = undefined
+      })
+      .addCase(createMaterialSpec.fulfilled, (state, action) => {
+        state.createMaterialSpecStatus = 'ready'
+        state.materialSpecs.unshift(action.payload)
+      })
+      .addCase(createMaterialSpec.rejected, (state, action) => {
+        state.createMaterialSpecStatus = 'error'
+        state.createMaterialSpecError = action.error.message ?? 'Could not create the material type'
+      })
+      .addCase(createStockFormat.pending, (state) => {
+        state.createStockFormatStatus = 'loading'
+        state.createStockFormatError = undefined
+      })
+      .addCase(createStockFormat.fulfilled, (state, action) => {
+        state.createStockFormatStatus = 'ready'
+        state.stockFormats.unshift(action.payload)
+      })
+      .addCase(createStockFormat.rejected, (state, action) => {
+        state.createStockFormatStatus = 'error'
+        state.createStockFormatError = action.error.message ?? 'Could not add the stock format'
       })
       .addCase(fetchParts.pending, (state) => {
         state.partsStatus = 'loading'
