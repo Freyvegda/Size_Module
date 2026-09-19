@@ -1191,7 +1191,7 @@ materials, parts, products, stock pool (formats + remnants), jobs, campaigns,
 settings; graceful degradation at every layer.
 
 Not implemented yet (from README + plan.txt, confirmed in code):
-- auth/sessions/RBAC; CSV imports; machine-control formats; defect maps;
+- auth/sessions/RBAC; CSV imports; machine-control formats;
 - multi-plant UI, irregular nesting, 3D bin packing;
 - OpenAPI-driven codegen (both sides are hand-maintained for now).
 
@@ -1203,7 +1203,10 @@ Known quirks and drift (worth knowing before you triage a bug):
   viewer, solver comparison) and can block up to the budget (handler timeout =
   budget + 5 s; router timeout 10 min). Long jobs belong on the queue.
 - **`platform/id` is unused** (UUID helper kept for later).
-- **`MaxCutStages` in rules is declared but not enforced** by the solvers today.
+- **`MaxCutStages` is enforced** on the guillotine cut tree: `BuildCutTreeStages`
+  searches within the limit and the validator raises `too_many_stages`. The
+  solvers attach cut steps only within the limit; a layout that cannot be cut in
+  the allowed stages is a validation error, never a silent success.
 - **1D `Height` trick**: bars get a nominal 1 mm height so area-based metrics
   don't divide by zero; use `stockLengthM`/`usedLengthM` for 1D reporting.
 - **Beam width 24 is empirical.** `docs/solver.md` records the measurement:

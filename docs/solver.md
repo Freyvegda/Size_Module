@@ -329,6 +329,14 @@ while usually finishing faster, because the cheap strategies often already win.
 
 ## Known limits and next steps
 
+- `maxCutStages` is enforced: `geom.BuildCutTreeStages` searches only within the
+  limit, every solver attaches cut steps with `cutter.ForSheetStages`, and the
+  validator raises `too_many_stages`. `shelf-2d` is naturally two-stage;
+  `beam-2d`/`cg-2d` may need a narrower stage limit to stay compliant on deep
+  layouts.
+- Physical stock pieces can carry a **defect map** (`core.StockItem.Defects`):
+  constructive solvers avoid the regions and `validator.Validate` raises
+  `defect_overlap` if a piece covers one.
 - Column generation is two-stage only (same-height strips). Three-stage and
   free-form guillotine patterns need different pricing; the LP machinery is
   ready for them.

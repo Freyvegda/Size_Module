@@ -43,6 +43,9 @@ docs/       Domain glossary and notes
 | Costing | every result carries a `cost` breakdown: new material, remnants taken, offcut credit, net cost, cost per part and per m² (`internal/optimizer/costing`) |
 | Realized-yield KPIs | `GET /api/v1/kpis?days=90` aggregates plan scorecards (realized = accepted plans, created = pipeline) with a trend series; the dashboard shows KPI cards and a yield chart |
 | Campaign planning | ordered jobs share one stock budget: running an item consumes sheets, returns its offcuts as `CMP-…` remnants and archives a draft plan; `POST /campaigns/{id}/run-next`, stock-budget UI at `/campaigns` |
+| Rules profiles | named constraint + objective presets stored in the database; `/rules` editor; `?rulesProfileId=` on runs and campaigns so glass/wood differ in data, not code |
+| Defect maps | unusable regions on a physical piece (knots, cracks, scratches); solvers avoid them and the validator rejects any plan that covers one |
+| Cut-stage limit | `maxCutStages` is enforced on the guillotine cut tree (staged search + `too_many_stages` violation) |
 | PostgreSQL schema + seeds | materials, specs, stock formats, parts, routings, jobs, plans, placements, audit |
 | Job archive | every non-dry `POST /optimize` persists job + plan + sheets + placements in one transaction |
 | Web app | dashboard, plan viewer (2D orthographic / 3D exploded with three.js, 1D bar tracks), solver picker + comparison, materials, parts, stock, jobs (sync run + async queue with live progress), settings |
@@ -51,7 +54,7 @@ See [`docs/solver.md`](docs/solver.md) for how the solvers work and how quality
 is gated.
 
 Not implemented yet (planned): authentication/roles, CSV imports,
-multi-plant, machine-control formats, defect maps, irregular nesting / 3D bin
+multi-plant, machine-control formats, irregular nesting / 3D bin
 packing, OpenAPI-driven codegen.
 
 ## Quickstart
@@ -270,6 +273,6 @@ optimizer keeps working and results simply are not archived.
    with a shrinking/refilling stock budget, CMP-… remnant labels, campaign UI).
 
 Remaining backlog (see the forward plan, `plan.txt`): auth/sessions/RBAC, CSV
-imports, machine-control formats, defect maps, multi-plant, irregular nesting
+imports, machine-control formats, multi-plant, irregular nesting
 and 3D bin packing, OpenAPI-driven codegen; the original v1 plan is kept as
 `plan-v1.txt`.

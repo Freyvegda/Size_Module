@@ -32,6 +32,7 @@ and `httpserver.New` mounts, in this order:
 - stock module: `GET/POST /api/v1/stock-items`, `GET/PATCH /api/v1/stock-items/{id}`
 - plans module: `GET /api/v1/plans`, `GET /api/v1/plans/{id}`, `POST /api/v1/plans/{id}/accept`, `POST /api/v1/plans/{id}/edit`, `POST /api/v1/plans/{id}/reoptimize`, `GET /api/v1/plans/{id}/exports?format=csv|svg|dxf|pdf`
 - kpis module: `GET /api/v1/kpis?days=90` (or `from`/`to`) — realized/pipeline material and cost aggregates plus a trend series
+- rules module: `GET/POST /api/v1/rules-profiles`, `GET/PUT /api/v1/rules-profiles/{id}` — named constraint + objective presets; `/optimize` and `/jobs` accept `?rulesProfileId=` (body rules win)
 - campaigns module: `GET/POST /api/v1/campaigns`, `GET/PATCH /api/v1/campaigns/{id}`, `POST /api/v1/campaigns/{id}/items`, `DELETE /api/v1/campaigns/{id}/items/{itemID}`, `POST /api/v1/campaigns/{id}/run-next`
 
 Optimize flow (sync): `jobs.Service.Run` → `optimizer.Solve` (picks the solver from the

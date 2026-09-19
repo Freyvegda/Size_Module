@@ -16,6 +16,7 @@ API through `/api` and `/healthz`, which the Vite dev server proxies to
 | `src/components/ui/` | shadcn primitives (button, card, table, select, tabs, …) |
 | `src/features/backend/` | health + meta slice (async thunks) |
 | `src/features/kpis/` | realized-yield KPI slice (`fetchKpis`, window in days) |
+| `src/features/rules/` | rules-profile slice + full constraint/objective editor (`rulesSlice.ts`, `RulesProfileEditor.tsx`) |
 | `src/features/campaigns/` | campaign list/detail slice (create, add/remove item, run-next mutations) |
 | `src/features/catalog/` | materials, material types/brands, parts, stock-format and physical-stock slice (list + create + update thunks) |
 | `src/features/optimizer/` | 1D/2D demo problems, optimization run + solver comparison + async job queue (submit/cancel, SSE progress) slice, `buildProblem.ts` (catalog parts → one problem per material/dimension, using cut sizes), `SolverBadges.tsx` |

@@ -10,10 +10,11 @@ not import each other; shared helpers live in `platform/httpx`.
 | `parts` | `store.go` | part catalog; finished sizes + routings → cut sizes (`CutSize`) | `ListParts`, `CreatePart` |
 | `assemblies` | `store.go` | product catalog: assemblies (overall size) + components (glass panels, frame beams) rendered in 2D/3D | `ListAssemblies`, `GetAssembly`, `CreateAssembly` |
 | `jobs` | `service.go`, `queue.go`, `worker.go`, `http.go` | solve orchestration, demo problems, run archiving, asynchronous queue + SSE progress, remnant injection | `SaveRun` (sync), `QueueStore` (async), `RemnantSource` (optional) |
-| `stock` | `store.go` | physical stock pieces: full pieces and labelled remnants | `ListItems`, `GetItem`, `CreateItem`, `UpdateItem` |
+| `stock` | `store.go` | physical stock pieces: full pieces and labelled remnants, each with an optional **defect map** (unusable regions) | `ListItems`, `GetItem`, `CreateItem`, `UpdateItem` |
 | `plans` | `store.go`, `http.go`, `edit.go` | archived plans (read), acceptance, validated edits, locked re-solve, exports | `ListPlans`, `GetPlan`, `AcceptPlan`, `SaveVersion` |
 | `campaigns` | `store.go`, `budget.go`, `http.go` | ordered jobs sharing one stock budget; `run-next` solves the next item and updates the budget | `ListCampaigns`, `GetCampaign`, `CreateCampaign`, `UpdateCampaign`, `AddItem`, `DeleteItem`, `NextItem`, `CompleteItem` |
 | `kpis` | `store.go` | realized-yield and costing aggregates over plan scorecards | `KPIs` |
+| `rules` | `store.go` | named constraint + objective presets (kerf, trim, grain, cut mode, offcut policy, weights); resolved into a problem via `?rulesProfileId=` | `ListProfiles`, `GetProfile`, `CreateProfile`, `UpdateProfile` |
 
 ## jobs
 

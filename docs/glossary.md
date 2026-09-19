@@ -35,7 +35,8 @@ fabric are all described with the same words; only the rules profile changes.
 | **Placement** | One part at one position on one sheet. |
 | **Plan** | A complete answer: which sheets, which placements, which offcuts. |
 | **Solution** | A plan plus metrics, notes and validations, as returned by a solver. |
-| **Rules profile** | A stored set of constraints (kerf, trim, rotation, grain, cut mode, offcut policy). The only place vertical specifics live. |
+| **Rules profile** | A stored set of constraints (kerf, trim, rotation, grain, cut mode, offcut policy, cut-stage limit) plus an objective preset. The only place vertical specifics live. |
+| **Defect map** | Unusable regions inside a physical piece (knot, crack, scratch). Solvers avoid them and the validator rejects any plan that covers one. |
 | **Objective** | The weighted goal: fulfil priority demand, minimise sheets, scrap, pattern count, offcut area, cost. |
 | **Yield** | Part area ÷ stock area, as a percentage. |
 | **Waste** | 100% − yield, split into trim, kerf, scrap and offcuts. |
